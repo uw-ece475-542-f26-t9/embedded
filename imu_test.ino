@@ -37,6 +37,7 @@ void setup() {
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
 }
 
+
 void loop() {
   sensors_event_t accel, gyro, temp;
   mpu.getEvent(&accel, &gyro, &temp);
