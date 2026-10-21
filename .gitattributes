@@ -1,0 +1,13 @@
+# Handle line endings automatically for all text files
+# and normalize them to LF when committed to the repository
+* text=auto
+
+# Force LF line endings on checkout and commit for all text files
+# (This ensures Windows users get LF files in their working directory)
+* text eol=lf
+
+# Explicitly declare files that must retain CRLF (like Windows batch files)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Denote binary files so Git leaves them untouched
