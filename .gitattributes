@@ -11,3 +11,11 @@
 *.cmd text eol=crlf
 
 # Denote binary files so Git leaves them untouched
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.bin binary
+*.npz binary
+*.zip binary

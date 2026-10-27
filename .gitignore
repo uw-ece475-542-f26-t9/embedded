@@ -1,1 +1,8 @@
 .env
+# Python
+.venv/
+__pycache__/
+
+# Capture sessions and analysis output (study data; keep it out of git)
+recordings/
+analysis/
