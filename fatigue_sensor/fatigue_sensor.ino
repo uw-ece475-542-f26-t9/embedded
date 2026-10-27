@@ -11,7 +11,8 @@
 //   [10..15] int16   gx, gy, gz   in 0.1 deg/s      (10 = 1 deg/s), gyro bias removed
 //
 // EMG (notify), every 100 ms (10 Hz), 14 bytes. The MyoWare's RAW output is
-// sampled at 2 kHz and each packet summarises the last 100 ms; sending every
+// sampled at 8 kHz by the ADC in DMA mode and decimated to 2 kHz (see
+// emg_adc.h), and each packet summarises the last 100 ms; sending every
 // sample would need ~4 KB/s and a larger MTU. Voltages in mV at the ADC pin:
 //   [0..3]   uint32  timestamp in ms since boot, at the end of the window
 //   [4..5]   uint16  number of samples in the window (~200)
@@ -29,6 +30,11 @@
 //
 // The app keeps a copy of these constants in
 // mobile-app/lib/wearable/protocol.dart; change both together.
+//
+// Capture mode (CAPTURE_MODE 1): also streams every EMG and IMU sample and
+// the rep counter's turning points over USB serial as framed binary, for
+// tools/record.py. Text logging is off so it doesn't corrupt the stream.
+// BLE works the same either way. See capture.h for the format.
 
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -36,7 +42,23 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 
+#include "capture.h"
+#include "emg_adc.h"
 #include "rep_counter.h"
+
+// 1 = stream raw data over USB for tools/record.py; 0 = normal text logs.
+#define CAPTURE_MODE 0
+// The stream is ~6.5 KB/s, more than 115200 baud carries comfortably. (On
+// the S3's native USB port the baud rate is ignored.)
+#define CAPTURE_BAUD 921600
+
+#if CAPTURE_MODE
+#define LOGF(...) do {} while (0)
+#define LOGLN(...) do {} while (0)
+#else
+#define LOGF(...) Serial.printf(__VA_ARGS__)
+#define LOGLN(...) Serial.println(__VA_ARGS__)
+#endif
 
 #define DEVICE_NAME        "Team9-Fatigue-Sensor"
 #define SERVICE_UUID       "7fc2f476-4996-49df-b915-54e84d61fedb"
@@ -46,7 +68,6 @@
 #define EMG_PIN            4
 #define IMU_SDA_PIN        5
 #define IMU_SCL_PIN        6
-#define SAMPLE_PERIOD_US   500  // EMG: 2 kHz
 #define SNAPSHOT_PERIOD_MS 100  // EMG: 10 snapshots/s
 #define IMU_PERIOD_MS      20   // IMU: 50 Hz
 
@@ -59,14 +80,19 @@ Adafruit_MPU6050 mpu;
 bool imuFound = false;
 RepCounter repCounter;
 
+EmgAdc emgAdc;
+bool emgFound = false;
+capture::Writer captureOut(Serial);
+capture::EmgBlocks emgBlocks;
+
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
     connected = true;
-    Serial.println("Central connected");
+    LOGLN("Central connected");
   }
   void onDisconnect(BLEServer *server) override {
     connected = false;
-    Serial.println("Central disconnected, advertising again");
+    LOGLN("Central disconnected, advertising again");
     BLEDevice::startAdvertising();  // ESP32 stops advertising after a connection; restart it
   }
 };
@@ -114,14 +140,14 @@ void sendSnapshot(uint32_t now) {
   // Once a second, a status line for the serial monitor.
   static uint8_t sent = 0;
   if (++sent % (1000 / SNAPSHOT_PERIOD_MS) == 0) {
-    Serial.printf("t=%lu emg: mean=%umV rms=%umV min=%umV max=%umV | ", now, mean, rms, minMv, maxMv);
+    LOGF("t=%lu emg: mean=%umV rms=%umV min=%umV max=%umV | ", now, mean, rms, minMv, maxMv);
     if (imuFound) {
-      Serial.printf("imu: angle=%.0f reps=%u%s", repCounter.angleDeg(), repCounter.reps(),
-                    repCounter.isStill() ? " still" : "");
+      LOGF("imu: angle=%.0f reps=%u%s", repCounter.angleDeg(), repCounter.reps(),
+           repCounter.isStill() ? " still" : "");
     } else {
-      Serial.print("imu: not found");
+      LOGF("imu: not found");
     }
-    Serial.println(connected ? " [connected]" : "");
+    LOGLN(connected ? " [connected]" : "");
   }
 
   count = 0;
@@ -130,6 +156,64 @@ void sendSnapshot(uint32_t now) {
   minMv = UINT16_MAX;
   maxMv = 0;
 }
+
+void onEmgSample(float mv, uint8_t clipped) {
+  addSample(lroundf(mv));
+#if CAPTURE_MODE
+  // The sample just produced has index samples() - 1.
+  if (emgBlocks.add(emgAdc.samples() - 1, mv, clipped)) {
+    captureOut.send(capture::EMG, emgBlocks.payload, Serial.availableForWrite());
+  }
+#endif
+}
+
+// ---- Capture frames ----
+
+#if CAPTURE_MODE
+void sendStatus(uint32_t now) {
+  capture::Payload p;
+  p.u8(capture::VERSION);
+  p.u16(EmgAdc::OUT_HZ);
+  p.u16(EmgAdc::ADC_HZ);
+  p.u16(1000 / IMU_PERIOD_MS);
+  p.u16(capture::EMG_PER_MV);
+  p.u32(emgAdc.samples());
+  p.u32(now);
+  p.u32(emgAdc.overflows());
+  p.u32(captureOut.dropped);
+  captureOut.send(capture::STATUS, p, Serial.availableForWrite());
+}
+
+void sendImuFrame(uint32_t stamp, Vec3 a, Vec3 wc) {
+  capture::Payload p;
+  p.u32(stamp);
+  p.i16((int16_t)(a.x * 1000));
+  p.i16((int16_t)(a.y * 1000));
+  p.i16((int16_t)(a.z * 1000));
+  p.i16((int16_t)(wc.x * 10));
+  p.i16((int16_t)(wc.y * 10));
+  p.i16((int16_t)(wc.z * 10));
+  p.f32(repCounter.angleDeg());
+  p.u8(repCounter.isStill());
+  captureOut.send(capture::IMU, p, Serial.availableForWrite());
+}
+
+void sendTurnFrame(TurningPoint t) {
+  capture::Payload p;
+  p.u32(t.stamp);
+  p.f32(t.angleDeg);
+  p.i8(t.top);
+  captureOut.send(capture::TURN, p, Serial.availableForWrite());
+}
+
+void sendRepFrame(uint32_t stamp) {
+  capture::Payload p;
+  p.u32(stamp);
+  p.u16(repCounter.reps());
+  p.u16(lroundf(repCounter.romDeg() * 10));
+  captureOut.send(capture::REP, p, Serial.availableForWrite());
+}
+#endif
 
 // ---- IMU and reps ----
 
@@ -167,12 +251,25 @@ void readImu(uint32_t now) {
   const float degPerRad = RAD_TO_DEG;  // float, so the S3's FPU does the math
   Vec3 w = {gyro.gyro.x * degPerRad, gyro.gyro.y * degPerRad, gyro.gyro.z * degPerRad};
 
-  if (repCounter.update(a, w, dt)) {
-    Serial.printf("Rep %u, %.0f deg\n", repCounter.reps(), repCounter.romDeg());
+  // Stamped with the EMG sample index so capture lines the streams up.
+  uint32_t stamp = emgAdc.samples();
+  uint32_t turnsBefore = repCounter.turnCount();
+  bool rep = repCounter.update(a, w, dt, stamp);
+#if CAPTURE_MODE
+  if (repCounter.turnCount() != turnsBefore) sendTurnFrame(repCounter.lastTurn());
+  if (rep) sendRepFrame(stamp);
+#else
+  (void)turnsBefore;
+#endif
+  if (rep) {
+    LOGF("Rep %u, %.0f deg\n", repCounter.reps(), repCounter.romDeg());
     sendReps(now);
   }
 
   Vec3 wc = w - repCounter.gyroBias();
+#if CAPTURE_MODE
+  sendImuFrame(stamp, a, wc);
+#endif
   uint8_t pkt[16];
   putU32(pkt, now);
   putI16(pkt + 4,  (int16_t)(a.x * 1000));
@@ -186,20 +283,25 @@ void readImu(uint32_t now) {
   if (connected) imuChar->notify();
 }
 
-uint32_t lastSampleUs;
 uint32_t lastSendMs;
 uint32_t lastImuMs;
+uint32_t lastStatusMs;
 
 void setup() {
+#if CAPTURE_MODE
+  Serial.setTxBufferSize(4096);  // ~0.6 s of stream, if the port is a UART
+  Serial.begin(CAPTURE_BAUD);
+#else
   Serial.begin(115200);
+#endif
 
-  analogReadResolution(12);
-  analogSetPinAttenuation(EMG_PIN, ADC_11db);  // widest input range, ~0-3.1 V
+  emgFound = emgAdc.begin(EMG_PIN);
+  if (!emgFound) LOGLN("EMG ADC failed to start. Is EMG_PIN an ADC pin?");
 
   imuFound = startImu();
   if (!imuFound) {
     // Keep going so EMG still works; the app just won't see motion or reps.
-    Serial.println("MPU6050 not found. Check power, wiring and solder joints.");
+    LOGLN("MPU6050 not found. Check power, wiring and solder joints.");
   }
 
   BLEDevice::init(DEVICE_NAME);
@@ -225,19 +327,16 @@ void setup() {
   adv->setScanResponse(true);
   BLEDevice::startAdvertising();
 
-  Serial.println("Advertising as " DEVICE_NAME);
-  lastSampleUs = micros();
-  lastSendMs = lastImuMs = millis();
+  LOGLN("Advertising as " DEVICE_NAME);
+  lastSendMs = lastImuMs = lastStatusMs = millis();
 }
 
 void loop() {
+  // The ADC samples in the background; collect what it has.
+  emgAdc.poll(onEmgSample);
+
   // Advance by whole periods so the average rates hold even if a BLE call or
   // an IMU read holds up the loop for a moment.
-  if (micros() - lastSampleUs >= SAMPLE_PERIOD_US) {
-    lastSampleUs += SAMPLE_PERIOD_US;
-    addSample(analogReadMilliVolts(EMG_PIN));
-  }
-
   uint32_t now = millis();
   if (imuFound && now - lastImuMs >= IMU_PERIOD_MS) {
     lastImuMs += IMU_PERIOD_MS;
@@ -247,4 +346,10 @@ void loop() {
     lastSendMs += SNAPSHOT_PERIOD_MS;
     sendSnapshot(now);
   }
+#if CAPTURE_MODE
+  if (now - lastStatusMs >= 1000) {
+    lastStatusMs += 1000;
+    sendStatus(now);
+  }
+#endif
 }
