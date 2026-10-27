@@ -13,6 +13,12 @@
 // the angle is frozen while it's still. A swing only compares the angle with
 // where it was a second or two earlier, so what drift is left doesn't matter.
 //
+// Each turning point is also recorded with the caller's timestamp for the
+// moment the arm was there (the capture build passes the EMG sample index),
+// so an analysis can split the recording into reps and half-reps. If the
+// arm rests at a turning point, its time is the end of the rest, when the
+// next swing began.
+//
 // No Arduino code in here, so it can be tested on a computer.
 
 #pragma once
@@ -22,6 +28,13 @@
 
 struct Vec3 {
   float x, y, z;
+};
+
+// Where the arm turned around.
+struct TurningPoint {
+  uint32_t stamp;  // caller's timestamp when the arm was there
+  float angleDeg;  // arm angle there
+  int8_t top;      // +1 if the angle peaked here, -1 if it bottomed out
 };
 
 inline Vec3 operator+(Vec3 a, Vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
@@ -54,15 +67,20 @@ class RepCounter {
   static constexpr float UNSETTLED_DPS = 15;
   static constexpr float STILL_LONG_S = 3;
 
+  // Resting within this of a turning point counts as resting at it.
+  static constexpr float REST_AT_TURN_DEG = 10;
+
   // Only learn the elbow axis from clear rotation, averaged over about a
   // second of movement.
   static constexpr float AXIS_MIN_DPS = 30;
   static constexpr float AXIS_TAU_S = 1;
 
   // a in g, w in deg/s straight from the IMU, dt in seconds since the last
-  // call. Returns true when a rep has just been counted.
-  bool update(Vec3 a, Vec3 w, float dt) {
+  // call, stamp the caller's timestamp for this sample (only used to time
+  // turning points). Returns true when a rep has just been counted.
+  bool update(Vec3 a, Vec3 w, float dt, uint32_t stamp = 0) {
     if (dt <= 0) return false;
+    now = stamp;
     if (!started) {
       aSmooth = steadyAt = a;
       started = true;
@@ -85,6 +103,12 @@ class RepCounter {
     if (still) {
       stillTime = fminf(stillTime + dt, BIAS_TAU_S);
       bias = bias + (dt / stillTime) * (w - bias);
+      // Resting at the last extreme: the turning point is when it leaves.
+      if (dir == 0) {
+        turnStamp = stamp;
+      } else if (fabsf(angle - peak) < REST_AT_TURN_DEG) {
+        peakStamp = stamp;
+      }
       return false;
     }
 
@@ -101,6 +125,10 @@ class RepCounter {
   float angleDeg() const { return angle; }
   bool isStill() const { return still; }
   Vec3 gyroBias() const { return bias; }
+  // Turning points confirmed since boot; check it after update() to spot a
+  // new one, then read it with lastTurn().
+  uint32_t turnCount() const { return turns; }
+  TurningPoint lastTurn() const { return lastTurnPoint; }
 
  private:
   // Fraction to move a running average by, for time constant tau.
@@ -126,28 +154,40 @@ class RepCounter {
 
   bool trackSwing() {
     if (dir == 0) {
-      // First swing since boot, either way.
+      // First swing since boot, either way. Where it started counts as a
+      // turning point too.
       if (fabsf(angle - turn) < SWING_DEG) return false;
       dir = angle > turn ? 1 : -1;
+      recordTurn(turnStamp, turn, -dir);
       peak = angle;
+      peakStamp = now;
       swings++;
       return false;
     }
     if ((angle - peak) * dir > 0) {
       peak = angle;  // still swinging the same way
+      peakStamp = now;
       return false;
     }
     if ((peak - angle) * dir < SWING_DEG) return false;
 
     // Swung back far enough that `peak` was a turning point.
     float swing = fabsf(peak - turn);
+    recordTurn(peakStamp, peak, dir);
     turn = peak;
+    turnStamp = peakStamp;
     peak = angle;
+    peakStamp = now;
     dir = -dir;
     if (++swings % 2 != 0) return false;
     repCount++;
     rom = swing;
     return true;
+  }
+
+  void recordTurn(uint32_t stamp, float angleDeg, int8_t top) {
+    lastTurnPoint = {stamp, angleDeg, top};
+    turns++;
   }
 
   bool started = false;
@@ -170,4 +210,10 @@ class RepCounter {
   uint32_t swings = 0;
   uint16_t repCount = 0;
   float rom = 0;
+
+  uint32_t now = 0;         // stamp of the current update()
+  uint32_t turnStamp = 0;   // when the arm was at `turn`
+  uint32_t peakStamp = 0;   // when the arm was at `peak`
+  uint32_t turns = 0;
+  TurningPoint lastTurnPoint = {0, 0, 0};
 };
