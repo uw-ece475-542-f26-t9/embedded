@@ -1,0 +1,10 @@
+$ python diagnostics/hold_summary.py A_squeeze:A_light,A_heavy1,A_heavy2,A_heavy3 B_squeeze2:B_light2,B_try1,B_try2,B_try3
+hold        effort  secs  pitch change  chance random  loudness change  chance random
+A_light        22%    60         -2.6%        4.2e-01           -24.4%        1.7e-16
+A_heavy1       30%    60         -7.8%        1.6e-02            +5.1%        1.8e-01
+A_heavy2       26%    60         -9.2%        5.1e-03            +2.7%        4.4e-01
+A_heavy3       26%    60        -14.6%        9.6e-06           +20.3%        3.1e-06
+B_light2       18%    60         -5.9%        5.2e-02           -20.6%        3.7e-10
+B_try1         84%    10        -28.1%        1.7e-03           +21.0%        1.5e-01
+B_try2         43%    10        -22.7%        4.7e-03            -4.3%        5.9e-01
+B_try3         74%    10        +15.5%        6.7e-02            -3.4%        5.8e-01

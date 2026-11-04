@@ -1,0 +1,12 @@
+{
+  "name": "B_check2",
+  "requested_rate_hz": 10000,
+  "rate_hz": 10000.0,
+  "readings": 100096,
+  "seconds": 10.0096,
+  "board_overflows": 0,
+  "resyncs": 0,
+  "board_reboots": 0,
+  "markers": [],
+  "ok": true
+}

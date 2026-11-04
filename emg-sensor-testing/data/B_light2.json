@@ -1,0 +1,21 @@
+{
+  "name": "B_light2",
+  "requested_rate_hz": 10000,
+  "rate_hz": 10000.0,
+  "readings": 650490,
+  "seconds": 65.049,
+  "board_overflows": 0,
+  "resyncs": 0,
+  "board_reboots": 0,
+  "markers": [
+    [
+      50070,
+      "start"
+    ],
+    [
+      650490,
+      "end"
+    ]
+  ],
+  "ok": true
+}

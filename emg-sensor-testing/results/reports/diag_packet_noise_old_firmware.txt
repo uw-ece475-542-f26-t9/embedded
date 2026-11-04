@@ -1,0 +1,3 @@
+$ python diagnostics/packet_noise.py A_rest B_rest --period 128
+A_rest: pattern repeating every 128 readings (78.1/s) is 2.8 counts peak-to-peak; random noise level 6.4 counts
+B_rest: pattern repeating every 128 readings (78.1/s) is 9.2 counts peak-to-peak; random noise level 7.1 counts

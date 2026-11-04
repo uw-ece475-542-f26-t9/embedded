@@ -1,0 +1,14 @@
+$ python diagnostics/check_recording.py B_check --compare A_squeeze
+B_check: RAW 0-1503, median 0, at rails 63.23%; ENV 77-3918
+    0.0s  RAW median     0  spread    0.0  min     0  max     0  at rails 100.0%  ENV median   113
+    1.0s  RAW median     0  spread    0.0  min     0  max     0  at rails 100.0%  ENV median   111
+    2.0s  RAW median     0  spread    0.0  min     0  max     0  at rails 100.0%  ENV median   117
+    3.0s  RAW median     0  spread   13.8  min     0  max    83  at rails  79.5%  ENV median   118
+    4.0s  RAW median     0  spread    0.0  min     0  max     0  at rails 100.0%  ENV median   115
+    5.0s  RAW median     0  spread    0.0  min     0  max     0  at rails 100.0%  ENV median   115
+    6.0s  RAW median     3  spread  516.1  min     0  max  1499  at rails  55.0%  ENV median   208
+    7.0s  RAW median  1495  spread   90.2  min   995  max  1502  at rails   0.0%  ENV median  3819
+    8.0s  RAW median  1496  spread    2.5  min  1481  max  1503  at rails   0.0%  ENV median  3823
+    9.0s  RAW median  1494  spread  121.1  min   994  max  1503  at rails   0.0%  ENV median  3818
+   10.0s  RAW median  1495  spread    2.5  min  1484  max  1501  at rails   0.0%  ENV median  3818
+Plot: results/diagnostics/check_B_check.png

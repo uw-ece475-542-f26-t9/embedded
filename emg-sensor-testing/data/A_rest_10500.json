@@ -1,0 +1,12 @@
+{
+  "name": "A_rest_10500",
+  "requested_rate_hz": 10500,
+  "rate_hz": 10504.197475710043,
+  "readings": 105088,
+  "seconds": 10.00438160487805,
+  "board_overflows": 0,
+  "resyncs": 0,
+  "board_reboots": 0,
+  "markers": [],
+  "ok": true
+}

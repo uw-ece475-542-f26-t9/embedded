@@ -1,0 +1,12 @@
+{
+  "name": "B_squeeze2",
+  "requested_rate_hz": 10000,
+  "rate_hz": 10000.0,
+  "readings": 750470,
+  "seconds": 75.047,
+  "board_overflows": 0,
+  "resyncs": 0,
+  "board_reboots": 0,
+  "markers": [],
+  "ok": true
+}
