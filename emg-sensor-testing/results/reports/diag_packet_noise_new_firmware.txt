@@ -1,0 +1,2 @@
+$ python diagnostics/packet_noise.py B_rest2 --period 10
+B_rest2: pattern repeating every 10 readings (1,000.0/s) is 4.4 counts peak-to-peak; random noise level 8.6 counts

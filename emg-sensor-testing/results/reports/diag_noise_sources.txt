@@ -1,0 +1,19 @@
+$ python diagnostics/noise_sources.py A_rest B_rest B_rest2
+A_rest:
+  loudness (filtered)             1.8 counts
+  share below 150 Hz              41%   (muscle ~80%+, electrical ~30-40%)
+  60 Hz hum share                 11%
+  hiss above 1,000 Hz             5.7 counts RMS
+  spikes (20-450 Hz)           [60.0]
+B_rest:
+  loudness (filtered)             2.5 counts
+  share below 150 Hz              40%   (muscle ~80%+, electrical ~30-40%)
+  60 Hz hum share                 49%
+  hiss above 1,000 Hz             5.8 counts RMS
+  spikes (20-450 Hz)           [27.0, 60.0, 78.0, 156.0, 234.0, 312.0, 391.0]
+B_rest2:
+  loudness (filtered)             2.3 counts
+  share below 150 Hz              38%   (muscle ~80%+, electrical ~30-40%)
+  60 Hz hum share                 40%
+  hiss above 1,000 Hz             7.6 counts RMS
+  spikes (20-450 Hz)           [60.0]

@@ -1,0 +1,12 @@
+{
+  "name": "smoke",
+  "requested_rate_hz": 10000,
+  "rate_hz": 10000.0,
+  "readings": 50176,
+  "seconds": 5.0176,
+  "board_overflows": 0,
+  "resyncs": 0,
+  "board_reboots": 0,
+  "markers": [],
+  "ok": true
+}

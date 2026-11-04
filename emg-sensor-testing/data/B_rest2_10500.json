@@ -1,0 +1,12 @@
+{
+  "name": "B_rest2_10500",
+  "requested_rate_hz": 10500,
+  "rate_hz": 10504.201680672268,
+  "readings": 105220,
+  "seconds": 10.016944,
+  "board_overflows": 0,
+  "resyncs": 0,
+  "board_reboots": 0,
+  "markers": [],
+  "ok": true
+}

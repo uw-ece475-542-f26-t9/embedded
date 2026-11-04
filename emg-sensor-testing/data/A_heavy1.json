@@ -1,0 +1,21 @@
+{
+  "name": "A_heavy1",
+  "requested_rate_hz": 10000,
+  "rate_hz": 10000.0,
+  "readings": 649984,
+  "seconds": 64.9984,
+  "board_overflows": 0,
+  "resyncs": 0,
+  "board_reboots": 0,
+  "markers": [
+    [
+      50048,
+      "start"
+    ],
+    [
+      649984,
+      "end"
+    ]
+  ],
+  "ok": true
+}

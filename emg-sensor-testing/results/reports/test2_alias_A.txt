@@ -1,0 +1,8 @@
+$ python analyze.py alias --rest A_rest --rest-alt A_rest_10500 --squeeze A_squeeze
+
+Test 2 - Aliasing check
+  PASS  No spikes move between 10,000/s and 10,504/s none
+  INFO  Squeeze power above 1000 Hz (vs 20-450 Hz)   0.98%
+  INFO  Middle pitch: plain 2000/s vs filtered       72.2 vs 72.3 Hz (0.0%) -> final device can sample at plain 2000/s
+Result: PASS (1/1)   plot: results/alias_A_squeeze.png
+

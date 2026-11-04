@@ -1,0 +1,10 @@
+$ python analyze.py squeezes --squeeze B_squeeze2 --rest
+
+Rest periods in B_squeeze2 (loudness also shown as % of squeeze 1)
+  #          time           loudness   middle pitch   mean freq     peak
+  1    1.0-4.5  s     2.6 ( 3.6%)         178 Hz      192 Hz    27 Hz
+  2    9.5-34.6 s     2.8 ( 3.9%)         185 Hz      198 Hz    27 Hz
+  3   39.4-64.7 s     3.2 ( 4.4%)         191 Hz      203 Hz    27 Hz
+  4   70.0-74.0 s     3.1 ( 4.2%)         178 Hz      195 Hz    27 Hz
+Plot: results/rest_B_squeeze2.png
+

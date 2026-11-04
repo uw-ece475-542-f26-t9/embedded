@@ -1,0 +1,21 @@
+{
+  "name": "A_light",
+  "requested_rate_hz": 10000,
+  "rate_hz": 10000.0,
+  "readings": 650368,
+  "seconds": 65.0368,
+  "board_overflows": 0,
+  "resyncs": 0,
+  "board_reboots": 0,
+  "markers": [
+    [
+      49920,
+      "start"
+    ],
+    [
+      650368,
+      "end"
+    ]
+  ],
+  "ok": true
+}

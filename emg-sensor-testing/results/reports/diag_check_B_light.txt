@@ -1,0 +1,17 @@
+$ python diagnostics/check_recording.py B_light --chunk 5
+B_light: RAW 0-4095, median 2138, at rails 28.17%; ENV 0-1533
+    0.0s  RAW median  2101  spread 1806.4  min     0  max  4095  at rails  28.1%  ENV median   670
+    5.0s  RAW median  2124  spread 1807.3  min     0  max  4095  at rails  28.2%  ENV median   678
+   10.0s  RAW median  2040  spread 1804.5  min     0  max  4095  at rails  27.9%  ENV median   661
+   15.0s  RAW median  2019  spread 1804.9  min     0  max  4095  at rails  28.0%  ENV median   653
+   20.0s  RAW median  2127  spread 1803.6  min     0  max  4095  at rails  28.4%  ENV median   671
+   25.0s  RAW median  2107  spread 1805.5  min     0  max  4095  at rails  28.3%  ENV median   677
+   30.0s  RAW median  2198  spread 1810.9  min     0  max  4095  at rails  28.5%  ENV median   703
+   35.0s  RAW median  2246  spread 1810.8  min     0  max  4095  at rails  28.0%  ENV median   731
+   40.0s  RAW median  2213  spread 1812.2  min     0  max  4095  at rails  27.8%  ENV median   729
+   45.0s  RAW median  2156  spread 1813.2  min     0  max  4095  at rails  27.9%  ENV median   718
+   50.0s  RAW median  2184  spread 1813.6  min     0  max  4095  at rails  28.3%  ENV median   713
+   55.0s  RAW median  2134  spread 1814.1  min     0  max  4095  at rails  28.3%  ENV median   699
+   60.0s  RAW median  2194  spread 1814.4  min     0  max  4095  at rails  28.4%  ENV median   715
+   65.0s  RAW median   464  spread 1768.8  min     0  max  4095  at rails  31.7%  ENV median   160
+Plot: results/diagnostics/check_B_light.png

@@ -1,0 +1,21 @@
+$ python analyze.py hold --light A_light --heavy A_heavy1 A_heavy2 A_heavy3 --squeeze A_squeeze
+
+Test 3 - Still hold
+  PASS  No readings lost (A_heavy1)                  0 overflows, 0 resyncs, 10,000/s
+  INFO  Effort vs max squeeze (A_heavy1)             30% at start (heavy target 50-60%)
+  FAIL  Middle pitch drops >= 10% (A_heavy1)         -7.8%, chance random 1.6e-02, held 59 s
+  FAIL  Loudness rises (A_heavy1)                    +5.1%, chance random 1.8e-01
+  PASS  No readings lost (A_heavy2)                  0 overflows, 0 resyncs, 10,000/s
+  INFO  Effort vs max squeeze (A_heavy2)             26% at start (heavy target 50-60%)
+  FAIL  Middle pitch drops >= 10% (A_heavy2)         -9.2%, chance random 5.1e-03, held 59 s
+  FAIL  Loudness rises (A_heavy2)                    +2.7%, chance random 4.4e-01
+  PASS  No readings lost (A_heavy3)                  0 overflows, 0 resyncs, 10,000/s
+  INFO  Effort vs max squeeze (A_heavy3)             26% at start (heavy target 50-60%)
+  PASS  Middle pitch drops >= 10% (A_heavy3)         -14.6%, chance random 9.6e-06, held 59 s
+  PASS  Loudness rises (A_heavy3)                    +20.3%, chance random 3.1e-06
+  PASS  No readings lost (A_light)                   0 overflows, 0 resyncs, 10,000/s
+  INFO  Effort vs max squeeze (A_light)              22% at start (heavy target 50-60%)
+  PASS  Light hold: no real trend (A_light)          -2.6%, chance random 4.2e-01, held 60 s
+  FAIL  Recovery: A_heavy2 starts within 5% of A_heavy1 56.5 vs 53.8 Hz (+5.1%)
+Result: FAIL (7/12)   plot: results/hold_A_heavy1.png
+

@@ -1,0 +1,11 @@
+$ python analyze.py signal --rest B_rest2 --squeeze B_squeeze2
+
+Test 1 - Signal check
+  PASS  No readings lost (B_rest2)                   0 overflows, 0 resyncs, 10,000/s
+  PASS  No readings lost (B_squeeze2)                0 overflows, 0 resyncs, 10,000/s
+  PASS  Squeeze loudness >= 10x rest                 28.4x
+  PASS  No flat tops (< 0.1% of readings at the rails) 0.000%
+  PASS  60 Hz hum < 1% of squeeze power              0.08%
+  PASS  Squeeze middle pitch 50-120 Hz               51 Hz
+Result: PASS (6/6)   plot: results/signal_B_squeeze2.png
+

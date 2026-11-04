@@ -1,0 +1,7 @@
+$ python diagnostics/slice_noise.py A_light B_light2 A_heavy1 A_heavy2 A_heavy3
+hold         scatter per slice   real drift per slice
+A_light                  10.0%                -0.022%
+B_light2                  9.4%                -0.049%
+A_heavy1                 10.1%                -0.066%
+A_heavy2                 10.2%                -0.077%
+A_heavy3                 10.0%                -0.124%

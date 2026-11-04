@@ -1,0 +1,21 @@
+{
+  "name": "B_try2",
+  "requested_rate_hz": 10000,
+  "rate_hz": 10000.0,
+  "readings": 150370,
+  "seconds": 15.037,
+  "board_overflows": 0,
+  "resyncs": 0,
+  "board_reboots": 0,
+  "markers": [
+    [
+      50190,
+      "start"
+    ],
+    [
+      150370,
+      "end"
+    ]
+  ],
+  "ok": true
+}
