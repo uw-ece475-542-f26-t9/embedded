@@ -19,3 +19,4 @@
 *.bin binary
 *.npz binary
 *.zip binary
+*.gz binary
