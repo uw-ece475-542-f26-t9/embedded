@@ -272,8 +272,8 @@ void readImu(uint32_t now) {
 
 // ---- DRV2605L haptic integration test ----
 
-constexpr uint32_t HAPTIC_INTERVAL_MS = 5000;
-constexpr uint32_t HAPTIC_PULSE_MS = 200;
+constexpr uint32_t HAPTIC_INTERVAL_MS = 1000; 
+constexpr uint32_t HAPTIC_PULSE_MS = 300;
 constexpr uint8_t HAPTIC_TEST_STRENGTH = 20;
 
 Adafruit_DRV2605 haptic;
