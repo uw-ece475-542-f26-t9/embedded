@@ -270,9 +270,8 @@ void readImu(uint32_t now) {
   if (connected) imuChar->notify();
 }
 
-// ---- DRV2605L haptic integration test ----
+// ---- DRV2605L haptic ----
 
-constexpr uint32_t HAPTIC_INTERVAL_MS = 1000; 
 constexpr uint32_t HAPTIC_PULSE_MS = 300;
 constexpr uint8_t HAPTIC_TEST_STRENGTH = 20;
 
@@ -281,18 +280,19 @@ bool hapticFound = false;
 bool hapticActive = false;
 uint32_t lastHapticStartMs = 0;
 
-void updateHaptic(uint32_t now) {
+// Starts one buzz; updateHaptic() ends it after HAPTIC_PULSE_MS without
+// blocking the loop.
+void startHapticPulse() {
   if (!hapticFound) return;
+  haptic.setRealtimeValue(HAPTIC_TEST_STRENGTH);
+  lastHapticStartMs = millis();
+  hapticActive = true;
+}
 
-  const uint32_t elapsed = now - lastHapticStartMs;
-
-  if (hapticActive && elapsed >= HAPTIC_PULSE_MS) {
+void updateHaptic(uint32_t now) {
+  if (hapticActive && now - lastHapticStartMs >= HAPTIC_PULSE_MS) {
     haptic.setRealtimeValue(0);
     hapticActive = false;
-  } else if (!hapticActive && elapsed >= HAPTIC_INTERVAL_MS) {
-    haptic.setRealtimeValue(HAPTIC_TEST_STRENGTH);
-    lastHapticStartMs = millis();
-    hapticActive = true;
   }
 }
 
@@ -327,7 +327,7 @@ void setup() {
     haptic.useLRA();
     haptic.setRealtimeValue(0);
     haptic.setMode(DRV2605_MODE_REALTIME);
-    LOGLN("DRV2605L ready. Haptic test pulses every 5 seconds.");
+    LOGLN("DRV2605L ready.");
   } else {
     LOGLN("DRV2605L not found at 0x5A. Haptic test disabled.");
   }
@@ -355,7 +355,8 @@ void setup() {
   BLEDevice::startAdvertising();
 
   LOGLN("Advertising as " DEVICE_NAME);
-  lastHapticStartMs = lastSendMs = lastImuMs = lastStatusMs = millis();
+  lastSendMs = lastImuMs = lastStatusMs = millis();
+  startHapticPulse();  // one buzz: powered on and advertising
 }
 
 void loop() {
