@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 SYNC = b"\xa5\x5a"
-STATUS, EMG, IMU, TURN, REP = 0x01, 0x02, 0x03, 0x04, 0x05
+STATUS, EMG, IMU, TURN, REP, FEAT = 0x01, 0x02, 0x03, 0x04, 0x05, 0x06
 MAX_PAYLOAD = 1024
 
 

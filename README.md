@@ -7,15 +7,15 @@ Embedded code for the esp-32.
 
 | Folder | What it is |
 |---|---|
-| `fatigue_sensor/` | The wearable's firmware: MyoWare 2.0 EMG on GPIO4, MPU-6050 IMU with rep counter, BLE to the app, and a USB capture mode for EMG analysis |
-| `tools/` | Python: record capture sessions, analyse EMG fatigue features, simulate recordings |
+| `fatigue_sensor/` | The wearable's firmware: MyoWare 2.0 EMG, MPU-6050 IMU with rep counter, DRV2605L haptic, the on-device fatigue model, BLE to the app, and a USB capture mode for EMG analysis |
+| `tools/` | Python: record capture sessions, analyse EMG fatigue features, train the on-device model, simulate recordings, host tests |
 | `imu_test/`, `myoware_test/` | Early bring-up sketches |
 
 ## Firmware
 
 Open `fatigue_sensor/fatigue_sensor.ino` in the Arduino IDE with the
-**esp32 by Espressif** core (3.x) and the **Adafruit MPU6050** library.
-Select your ESP32-S3 board and flash.
+**esp32 by Espressif** core (3.x) and the **Adafruit MPU6050** and
+**Adafruit DRV2605 Library** libraries. Select **XIAO_ESP32S3** and flash.
 
 - **EMG** is sampled by the ADC in continuous (DMA) mode at 8 kHz and
   decimated to 2 kHz with a 31-tap FIR low-pass (`emg_adc.h`). Sampling in
@@ -25,8 +25,65 @@ Select your ESP32-S3 board and flash.
 - **Reps** are counted from the IMU (`rep_counter.h`). The counter also
   records when each turning point happened, so an analysis can split
   recordings into reps.
-- **BLE** packets are unchanged; see the comment at the top of the sketch
-  and `mobile-app/lib/wearable/protocol.dart`.
+- **Fatigue model** runs after every rep; see below.
+- **BLE** IMU and EMG packets are unchanged. The rep packet grew from 8 to
+  12 bytes with the model's output (below); apps that read only the first 8
+  still work. See `mobile-app/lib/wearable/protocol.dart`.
+- **Serial monitor** (115200): a status line every second, a block per rep,
+  and commands: `i` model and sensor info, `h` test the haptic alert, `n`
+  start a new set, `f` I'm at failure (see below).
+
+## On-device fatigue model
+
+After each rep the ESP32 estimates **reps in reserve** (RIR: reps left
+before failure), and buzzes the haptic once it's at `ALERT_RIR` (2) or
+fewer.
+
+1. **Features** (`fatigue_features.h`). From the rep's lift: peak turning
+   speed, moving time, range of motion, EMG RMS (20–400 Hz band-pass, 60 Hz
+   notch) and EMG median frequency (spectrum averaged over 256 ms frames).
+   Each is divided by its median over the set's first 3 reps, so the
+   model sees change within the set, not absolute levels, and one odd rep
+   at the start doesn't skew the rest. Predictions start at rep 4. A new
+   set starts after a 15 s rest. The lift is the half of the rep with more
+   EMG, picked once the first rep is complete, so it works whichever way
+   up the board is mounted.
+2. **Model** (`fatigue_model.h`, weights in `fatigue_model_data.h`). A small
+   neural network (6 → 16 → 8 → 1) with int8 weights: 232 bytes, about
+   20 µs per prediction. At boot it checks it gives the same answers as
+   Python on test vectors stored with the weights (`i` shows the result).
+3. **Output.** Serial log, BLE rep packet bytes 8–11 (u16 RIR × 10, `0xFFFF`
+   before rep 3; u8 % of the set done, `0xFF` before rep 3; u8 flags, bit 0
+   = alert sent this set), and a FEAT frame in capture mode.
+4. **Checking it by hand.** At the end of a set taken to failure, type `f`
+   in the serial monitor. It lists the model's estimate at each rep next to
+   the true reps in reserve, with the average error, and starts a new set.
+
+**The model in the repo is trained on synthetic data.** It proves the
+pipeline works end to end on the board; its numbers mean nothing about real
+fatigue yet. To train on real data:
+
+1. Flash with `CAPTURE_MODE 1` and record fatigue sets to failure with
+   `tools/record.py` (enter the failure rep when asked). The firmware puts
+   its own per-rep features in the recording, so the model trains on
+   exactly what the device measures.
+2. Train. This prints leave-one-person-out accuracy against a velocity-only
+   baseline and overwrites `fatigue_sensor/fatigue_model_data.h`:
+
+   ```bash
+   .venv/bin/python tools/train_model.py recordings/
+   ```
+
+3. Set `CAPTURE_MODE 0` and flash.
+
+`--synthetic` instead of a folder regenerates the synthetic model.
+
+To check the feature and model code on a computer (builds it with clang,
+runs simulated sets through it, and compares with numpy):
+
+```bash
+.venv/bin/python tools/host_test/run.py
+```
 
 ## EMG fatigue feature test (MVP)
 

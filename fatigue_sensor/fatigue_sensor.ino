@@ -8,6 +8,8 @@
 
 #include "capture.h"
 #include "emg_adc.h"
+#include "fatigue_features.h"
+#include "fatigue_model.h"
 #include "rep_counter.h"
 
 // 1 = binary USB capture for tools/record.py, 0 = normal text logs.
@@ -34,6 +36,10 @@
 #define SNAPSHOT_PERIOD_MS 100  // EMG: 10 snapshots/s
 #define IMU_PERIOD_MS      20   // IMU: 50 Hz
 
+// Alert (haptic, and a flag in the BLE rep packet) once the model thinks
+// the set is this many reps or fewer from failure.
+constexpr float ALERT_RIR = 2;
+
 BLECharacteristic *imuChar;
 BLECharacteristic *emgChar;
 BLECharacteristic *repChar;
@@ -47,6 +53,17 @@ EmgAdc emgAdc;
 bool emgFound = false;
 capture::Writer captureOut(Serial);
 capture::EmgBlocks emgBlocks;
+
+FatigueFeatures fatigueFeatures;
+RepFeatures lastFeatures;
+float lastRir = NAN;  // the model's latest estimate, NaN until it has one
+bool alertedThisSet = false;
+
+// The model's estimates this set, for the 'f' (failure) report.
+constexpr int MAX_SET_REPS = 64;
+uint16_t setRep[MAX_SET_REPS];
+float setRir[MAX_SET_REPS];
+int setEstimates = 0;
 
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
@@ -110,7 +127,7 @@ void sendSnapshot(uint32_t now) {
   emgChar->setValue(pkt, sizeof(pkt));
   if (connected) emgChar->notify();
 
-  static uint8_t sent = 0;
+  static uint32_t sent = 0;  // a uint8_t wrapped every 256 and logged twice
   if (++sent % (1000 / SNAPSHOT_PERIOD_MS) == 0) {
     LOGF("t=%lu emg: mean=%umV rms=%umV min=%umV max=%umV | ",
          now, mean, rms, minMv, maxMv);
@@ -134,6 +151,7 @@ void sendSnapshot(uint32_t now) {
 
 void onEmgSample(float mv, uint8_t clipped) {
   addSample(lroundf(mv));
+  fatigueFeatures.addEmg(emgAdc.samples() - 1, mv);
 
 #if CAPTURE_MODE
   if (emgBlocks.add(emgAdc.samples() - 1, mv, clipped)) {
@@ -188,6 +206,25 @@ void sendRepFrame(uint32_t stamp) {
   p.u16(lroundf(repCounter.romDeg() * 10));
   captureOut.send(capture::REP, p, Serial.availableForWrite());
 }
+
+void sendFeatFrame(uint32_t stamp, const RepFeatures &f, bool alert) {
+  capture::Payload p;
+  p.u32(stamp);
+  p.u16(f.repInSet);
+  p.u8((f.emgOk ? 1 : 0) | (f.hasBaseline ? 2 : 0) | (alert ? 4 : 0));
+  p.f32(f.peakDps);
+  p.f32(f.movingS);
+  p.f32(f.romDeg);
+  p.f32(f.emgRmsMv);
+  p.f32(f.mdfHz);
+  p.f32(f.velocityLoss);
+  p.f32(f.durationRatio);
+  p.f32(f.romRatio);
+  p.f32(f.emgRatio);
+  p.f32(f.mdfRatio);
+  p.f32(lastRir);
+  captureOut.send(capture::FEAT, p, Serial.availableForWrite());
+}
 #endif
 
 // ---- IMU and reps ----
@@ -202,14 +239,69 @@ bool startImu() {
 }
 
 void sendReps(uint32_t now) {
-  // Timestamp, rep count and range of motion in tenths of a degree.
-  uint8_t pkt[8];
+  // Timestamp, rep count and range of motion in tenths of a degree, then
+  // the fatigue model: reps in reserve in tenths (0xFFFF until it has an
+  // estimate), how far through the set that is in % (0xFF until then), and
+  // flags (bit 0: alert). Apps that read only the first 8 bytes still work.
+  uint16_t rir10 = 0xFFFF;
+  uint8_t fatiguePct = 0xFF;
+  if (!isnan(lastRir)) {
+    rir10 = lroundf(fminf(lastRir, 6000) * 10);
+    uint16_t done = lastFeatures.repInSet;
+    fatiguePct = lroundf(100.0f * done / (done + lastRir));
+  }
+
+  uint8_t pkt[12];
   putU32(pkt, now);
   putU16(pkt + 4, repCounter.reps());
   putU16(pkt + 6, lroundf(repCounter.romDeg() * 10));
+  putU16(pkt + 8, rir10);
+  pkt[10] = fatiguePct;
+  pkt[11] = alertedThisSet ? 1 : 0;
 
   repChar->setValue(pkt, sizeof(pkt));
   if (connected) repChar->notify();
+}
+
+void startHapticAlert();
+
+// Runs the fatigue model on a lift that's just been measured.
+void onLift(uint32_t stamp, const RepFeatures &f) {
+  if (f.repInSet == 1) {
+    alertedThisSet = false;
+    setEstimates = 0;
+  }
+  lastFeatures = f;
+
+  uint32_t startUs = micros();
+  lastRir = f.hasBaseline ? fatigue_model::predict(f) : NAN;
+  [[maybe_unused]] uint32_t modelUs = micros() - startUs;
+  if (!isnan(lastRir) && setEstimates < MAX_SET_REPS) {
+    setRep[setEstimates] = f.repInSet;
+    setRir[setEstimates++] = lastRir;
+  }
+
+  bool alert = !isnan(lastRir) && lastRir <= ALERT_RIR && !alertedThisSet;
+  if (alert) {
+    alertedThisSet = true;
+    startHapticAlert();
+  }
+
+  LOGF("Set rep %u: peak %.0f deg/s, moving %.2f s, rom %.0f deg, emg %.1f mV, mdf %.0f Hz%s\n",
+       f.repInSet, f.peakDps, f.movingS, f.romDeg, f.emgRmsMv, f.mdfHz,
+       f.emgOk ? "" : " (no emg)");
+  if (f.hasBaseline) {
+    LOGF("  vs start of set: speed %+.0f%%, time x%.2f, rom x%.2f, emg x%.2f, mdf x%.2f\n",
+         -f.velocityLoss * 100, f.durationRatio, f.romRatio, f.emgRatio, f.mdfRatio);
+    LOGF("  model: %.1f reps in reserve (%lu us)%s\n", lastRir, modelUs,
+         alert ? "  ** ALERT **" : "");
+  } else {
+    LOGF("  baseline rep %u of %d\n", f.repInSet, FatigueFeatures::BASELINE_REPS);
+  }
+
+#if CAPTURE_MODE
+  sendFeatFrame(stamp, f, alert);
+#endif
 }
 
 void readImu(uint32_t now) {
@@ -234,23 +326,30 @@ void readImu(uint32_t now) {
     gyro.gyro.z * degPerRad
   };
 
-  uint32_t stamp = emgAdc.samples();
+  // EMG sample index, or 2 kHz from millis() if the ADC isn't running.
+  uint32_t stamp = emgFound ? emgAdc.samples() : now * 2;
   uint32_t turnsBefore = repCounter.turnCount();
   bool rep = repCounter.update(a, w, dt, stamp);
+  Vec3 wc = w - repCounter.gyroBias();
 
+  fatigueFeatures.addImu(stamp, norm(wc));
+  RepFeatures lift;
+  bool lifted = false;
+  if (repCounter.turnCount() != turnsBefore) {
+    lifted = fatigueFeatures.addTurn(repCounter.lastTurn(), &lift);
 #if CAPTURE_MODE
-  if (repCounter.turnCount() != turnsBefore) sendTurnFrame(repCounter.lastTurn());
-  if (rep) sendRepFrame(stamp);
-#else
-  (void)turnsBefore;
+    sendTurnFrame(repCounter.lastTurn());
 #endif
-
-  if (rep) {
-    LOGF("Rep %u, %.0f deg\n", repCounter.reps(), repCounter.romDeg());
-    sendReps(now);
   }
 
-  Vec3 wc = w - repCounter.gyroBias();
+  if (rep) {
+#if CAPTURE_MODE
+    sendRepFrame(stamp);
+#endif
+    LOGF("Rep %u, %.0f deg\n", repCounter.reps(), repCounter.romDeg());
+  }
+  if (lifted) onLift(stamp, lift);
+  if (rep || lifted) sendReps(now);
 
 #if CAPTURE_MODE
   sendImuFrame(stamp, a, wc);
@@ -272,13 +371,17 @@ void readImu(uint32_t now) {
 
 // ---- DRV2605L haptic ----
 
+// The fatigue alert is HAPTIC_ALERT_PULSES pulses, HAPTIC_ALERT_GAP_MS apart.
 constexpr uint32_t HAPTIC_PULSE_MS = 300;
 constexpr uint8_t HAPTIC_TEST_STRENGTH = 20;
+constexpr uint8_t HAPTIC_ALERT_PULSES = 3;
+constexpr uint32_t HAPTIC_ALERT_GAP_MS = 1000;
 
 Adafruit_DRV2605 haptic;
 bool hapticFound = false;
 bool hapticActive = false;
 uint32_t lastHapticStartMs = 0;
+uint8_t hapticPulsesLeft = 0;
 
 // Starts one buzz; updateHaptic() ends it after HAPTIC_PULSE_MS without
 // blocking the loop.
@@ -289,12 +392,84 @@ void startHapticPulse() {
   hapticActive = true;
 }
 
+void startHapticAlert() {
+  hapticPulsesLeft = HAPTIC_ALERT_PULSES - 1;
+  startHapticPulse();
+}
+
 void updateHaptic(uint32_t now) {
   if (hapticActive && now - lastHapticStartMs >= HAPTIC_PULSE_MS) {
     haptic.setRealtimeValue(0);
     hapticActive = false;
+  } else if (!hapticActive && hapticPulsesLeft > 0 &&
+             now - lastHapticStartMs >= HAPTIC_ALERT_GAP_MS) {
+    hapticPulsesLeft--;
+    startHapticPulse();
   }
 }
+
+// ---- Info and serial commands ----
+
+void printInfo() {
+  [[maybe_unused]] float error = fatigue_model::selfTestError();
+  uint32_t startUs = micros();
+  volatile float sink = 0;
+  for (int i = 0; i < 1000; i++) {
+    sink = sink + fatigue_model::predict(fatigue_model::TEST_IN[i % fatigue_model::N_TEST]);
+  }
+  [[maybe_unused]] float us = (micros() - startUs) / 1000.0f;
+
+  LOGF("Fatigue model, trained on %s\n", fatigue_model::SOURCE);
+  LOGF("  self-test %s: largest difference from Python %.6f reps; %.1f us per prediction\n",
+       error < 0.01f ? "ok" : "FAILED", error, us);
+  LOGF("  sensors: EMG %s, IMU %s, haptic %s. Alert at %.0f reps in reserve or fewer.\n",
+       emgFound ? "ok" : "missing", imuFound ? "ok" : "missing",
+       hapticFound ? "ok" : "missing", ALERT_RIR);
+  LOGF("  this set: %u reps\n", fatigueFeatures.repsInSet());
+  LOGLN("  serial commands: i = this info, h = test the haptic alert, n = start a new set,");
+  LOGLN("                   f = I'm at failure (shows how far off the model was, starts a new set)");
+}
+
+void startNewSet() {
+  fatigueFeatures.newSet();
+  lastRir = NAN;
+  alertedThisSet = false;
+  setEstimates = 0;
+}
+
+// The set ended at failure: the last rep done was the failure rep, so the
+// true reps in reserve at rep r was (failure rep - r).
+void reportFailure() {
+  uint16_t failure = fatigueFeatures.repsInSet();
+  LOGF("Failure at rep %u. Model's estimates vs actual reps in reserve:\n", failure);
+  float totalError = 0;
+  for (int i = 0; i < setEstimates; i++) {
+    int actual = (int)failure - setRep[i];
+    float error = setRir[i] - actual;
+    totalError += fabsf(error);
+    LOGF("  rep %2u: model %4.1f, actual %2d, off by %+.1f\n", setRep[i], setRir[i], actual, error);
+  }
+  if (setEstimates > 0) {
+    LOGF("  average error %.1f reps over %d estimates\n", totalError / setEstimates, setEstimates);
+  } else {
+    LOGF("  no estimates this set (they start at rep %d)\n", FatigueFeatures::BASELINE_REPS + 1);
+  }
+  startNewSet();
+  LOGLN("New set");
+}
+
+#if !CAPTURE_MODE
+void handleSerial() {
+  while (Serial.available()) {
+    switch (Serial.read()) {
+      case 'i': printInfo(); break;
+      case 'h': LOGLN("Haptic alert test"); startHapticAlert(); break;
+      case 'n': startNewSet(); LOGLN("New set"); break;
+      case 'f': reportFailure(); break;
+    }
+  }
+}
+#endif
 
 // ---- Setup and main loop ----
 
@@ -307,6 +482,14 @@ void setup() {
   Serial.setTxBufferSize(4096);
   Serial.begin(CAPTURE_BAUD);
 #else
+#if ARDUINO_USB_MODE && ARDUINO_USB_CDC_ON_BOOT
+  // Over native USB, a print waits for the computer to read it. With USB
+  // plugged in but no serial monitor open, the default wait held up every
+  // loop. No wait at all lost lines even with the monitor open, since a
+  // rep's log is bigger than the default 256-byte buffer.
+  Serial.setTxBufferSize(2048);
+  Serial.setTxTimeoutMs(5);
+#endif
   Serial.begin(115200);
 #endif
 
@@ -354,6 +537,7 @@ void setup() {
   adv->setScanResponse(true);
   BLEDevice::startAdvertising();
 
+  printInfo();
   LOGLN("Advertising as " DEVICE_NAME);
   lastSendMs = lastImuMs = lastStatusMs = millis();
   startHapticPulse();  // one buzz: powered on and advertising
@@ -364,17 +548,22 @@ void loop() {
 
   uint32_t now = millis();
 
+  // After a hold-up, skip ahead rather than run back to back to catch up.
   if (imuFound && now - lastImuMs >= IMU_PERIOD_MS) {
-    lastImuMs += IMU_PERIOD_MS;
+    lastImuMs = now - lastImuMs >= 5 * IMU_PERIOD_MS ? now : lastImuMs + IMU_PERIOD_MS;
     readImu(now);
   }
 
   if (now - lastSendMs >= SNAPSHOT_PERIOD_MS) {
-    lastSendMs += SNAPSHOT_PERIOD_MS;
+    lastSendMs = now - lastSendMs >= 5 * SNAPSHOT_PERIOD_MS ? now : lastSendMs + SNAPSHOT_PERIOD_MS;
     sendSnapshot(now);
   }
 
   updateHaptic(millis());
+
+#if !CAPTURE_MODE
+  handleSerial();
+#endif
 
 #if CAPTURE_MODE
   if (now - lastStatusMs >= 1000) {

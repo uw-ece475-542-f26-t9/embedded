@@ -125,7 +125,8 @@ class EmgAdc {
   static constexpr uint32_t FRAME_READINGS = 64;
 
   static bool IRAM_ATTR onOverflow(adc_continuous_handle_t, const adc_continuous_evt_data_t *, void *self) {
-    static_cast<EmgAdc *>(self)->overflowCount++;
+    EmgAdc *adc = static_cast<EmgAdc *>(self);
+    adc->overflowCount = adc->overflowCount + 1;  // only this ISR writes it
     return false;
   }
 

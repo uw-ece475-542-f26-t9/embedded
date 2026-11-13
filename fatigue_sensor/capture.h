@@ -27,6 +27,11 @@
 //        i8 +1 if it was the top of a swing up the angle, -1 if the bottom
 //   0x05 REP, when a rep is counted
 //        u32 emg_index, u16 reps since boot, u16 range of motion (0.1 deg)
+//   0x06 FEAT, after REP, with what the fatigue model saw and said
+//        u32 emg_index, u16 rep in set, u8 flags (1 emg ok, 2 has
+//        baseline, 4 alert), f32 peak deg/s, moving s, rom deg, emg rms mV,
+//        mdf Hz, f32 velocity loss, duration ratio, rom ratio, emg ratio,
+//        mdf ratio, f32 predicted reps in reserve (NaN before the baseline)
 //
 // No Arduino code in here except the Print it writes to.
 
@@ -39,7 +44,8 @@
 namespace capture {
 
 constexpr uint8_t VERSION = 1;
-constexpr uint8_t STATUS = 0x01, EMG = 0x02, IMU = 0x03, TURN = 0x04, REP = 0x05;
+constexpr uint8_t STATUS = 0x01, EMG = 0x02, IMU = 0x03, TURN = 0x04, REP = 0x05,
+                  FEAT = 0x06;
 constexpr uint16_t EMG_PER_MV = 10;  // samples are sent in 0.1 mV
 constexpr uint8_t EMG_BLOCK = 32;    // 16 ms of EMG per frame
 
