@@ -15,6 +15,7 @@ Signal processing and ML for the bicep fatigue wearable. The plan and design rul
 | 6b | The remaining 12 candidate features (#2–4, #6, #9–11, #16, #18–21): all 20 candidates now computed | Done |
 | 7 | Kalman filters: level + slope per feature, q and r fitted by maximum likelihood on training people, innovation check | Done |
 | 8 | Models (ridge, small net under the size rule, physics-style comparison) and the nested random-subset search; feature cache. Trained on real data only | Built (code-tested) |
+| 10 (1-3) | Lab kit: protocol recorder with metronome and cues (`python -m pipeline.lab P01`), on-the-spot checks, video label import with sync-flick alignment and rater agreement (`python -m pipeline.labels`) | Built (code-tested; needs the board) |
 | 9 | Warnings: threshold + persistence + latch, tuned on out-of-person predictions: weighted false alarms <= 1 in 3 sets (later sets weigh more), then fewest misses | Built (code-tested) |
 
 ## Use
@@ -66,6 +67,8 @@ s.problems(cfg), s.notes()
 | `pipeline/model.py` | Step 8: `FatigueModel`, `PhysicsModel`, feature cache, `CORE_V1` |
 | `pipeline/search.py` | Step 8b: random-subset ranking (`rank`), `SearchedModel` (fully nested) |
 | `pipeline/warn.py` | Step 9: `Policy`, `tune`, `Warned` |
+| `pipeline/lab.py` | Step 10: protocol recorder, cues, on-the-spot checks |
+| `pipeline/labels.py` | Step 10: video label sheet, sync-flick alignment, rater agreement |
 | `pipeline/evaluate.py` | Step 3 harness: `SetData`, `load_sets`, `evaluate`, `report`, `causal_check` |
 | `pipeline/models.py` | Baselines and the oracle |
 | `tests/` | Tests |

@@ -73,16 +73,21 @@ class SetData:
 
 
 def load_sets(folder: str | Path) -> list[SetData]:
-    folder, sets = Path(folder), []
+    folder, sets, unlabelled = Path(folder), [], []
     for side in sorted(folder.glob("*_set[0-9].json")):
         info = json.loads(side.read_text())
         labels = info.get("labels", {})
+        if labels.get("set_start_s") is None:   # not labelled from video yet (pipeline.labels apply)
+            unlabelled.append(side.stem)
+            continue
         sets.append(SetData(name=side.stem, path=side.with_suffix(".bin"), participant=info["participant"],
                             set_no=int(info["set"]), rest_before_s=info.get("rest_before_s"),
                             set_start_s=float(labels["set_start_s"]), stop_s=labels.get("stop_point_s"),
                             failure_s=labels.get("failure_s"), meta=info))
+    if unlabelled:
+        print(f"skipped {len(unlabelled)} set(s) with no video labels yet: {', '.join(unlabelled)}")
     if not sets:
-        raise FileNotFoundError(f"no sets (NAME_setN.json) in {folder}")
+        raise FileNotFoundError(f"no labelled sets (NAME_setN.json with labels) in {folder}")
     return sets
 
 
