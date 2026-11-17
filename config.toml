@@ -1,0 +1,129 @@
+# Every tunable knob in the pipeline. Tune on training people only; freeze before the 8-person collection.
+
+[input]
+emg_hz = 2000                 # rate every reader delivers EMG at
+max_missing_share = 0.01      # reject a session if more of its EMG than this is missing
+max_gap_s = 0.1               # reject if any single EMG gap is longer than this
+max_clipped_share = 0.001     # reject if more raw ADC readings than this sat at a rail
+max_imu_gap_s = 0.2           # reject if the IMU stream has a gap longer than this (it drives the angle gate)
+reboot_jump_s = 1.0           # EMG index jumping back by more than this = the board rebooted
+legacy_full_scale_mv = 3100   # sensor-testing recordings: 0-4095 ADC counts -> 0-3100 mV (12 dB attenuation, nominal)
+legacy_rail_counts = 5        # a reading within this of 0 or 4095 counts as clipped
+legacy_data_dir = "../emg-sensor-testing/data"
+
+# ---------------------------------------------------------------- step 2: simulator
+# Fake protocol-shaped sessions with the right answers known. Values marked "sensor testing"
+# were measured on the real recordings (A/B, 2026-10-27/29).
+[sim]
+people = 8
+seed = 0
+rest_orders = [[60, 180], [180, 60], [180, 60], [60, 180], [60, 180], [180, 60], [180, 60], [60, 180]]
+cadence_s = 2.0               # metronome: one rep every 2 s
+lift_s = 1.0                  # lift time when fresh
+# fatigue: one hidden tiredness level per person; 0 = fresh, stop_level = form breaks, 1 = failure
+reps_to_stop_fresh = 13       # reps to the stop point from fresh (a 12-15 rep load); 0 = no fatigue
+reps_to_stop_spread = 0.15    # person-to-person spread (log-normal sigma)
+stop_level = 0.8              # failure (1.0) comes ~3 reps after the stop point
+stop_level_spread = 0.1       # people break form at different tiredness (log-normal sigma, capped at 0.95)
+recovery_tau_s = 60           # tiredness decays with this time constant during rest
+mdf_drop = 0.15               # middle pitch fall, fresh -> stop point (keeps falling after it)
+loud_rise = 0.40              # loudness rise, fresh -> stop point (levels off after it)
+fatigue_spread = 0.3          # person-to-person spread of mdf_drop and loud_rise (log-normal sigma)
+speed_loss = 0.20             # lift speed loss at the stop point (grows with tiredness squared)
+# EMG
+mdf_fresh_hz = [50, 75]       # fresh middle pitch range (sensor testing: B 51, A 72)
+mdf_rep_jitter = 0.03         # rep-to-rep wobble in middle pitch
+angle_mdf_effect = 0.08       # middle pitch shift across the lift from arm angle (+- fraction)
+lowering_loudness = 0.5       # lowering is quieter than lifting
+curl_effort = 0.5             # curl loudness as a share of max-pull loudness
+max_pull_rms_mv = 45          # max-pull loudness at the ADC pin (sensor testing: 44-48 mV)
+loudness_scale_spread = 0.5   # skin/electrode loudness scale per person (log-normal sigma)
+rest_noise_mv = 2.0           # background noise in 20-450 Hz (sensor testing: 1.5-2.3 mV)
+hum_mv = [1.0, 0.15, 0.15]    # 60/120/180 Hz (sensor testing: 0.4-1.3, 0.1, 0.15)
+packet_noise_mv = 0.0         # peaks at multiples of 50 and 62.5 Hz (the USB frame rates); 0 = off
+motion_artifact_mv = 15       # jolt below 20 Hz at the start of each lift and lowering
+midrail_mv = 1440             # RAW sits here at rest (sensor testing: 1440-1445 mV)
+board_clock_spread = 0.003    # board EMG clock error (fraction)
+# effort, not fatigue: middle pitch and loudness both go up
+effort_prob = 0.1             # chance a rep is an effort surge
+effort_size = 0.4             # loudness up to +40%, middle pitch up a quarter of that
+# IMU and form
+rom_deg = 125
+bottom_deg = 10
+mount_tilt_deg = 10
+accel_noise_g = 0.01
+gyro_noise_dps = 0.5
+forearm_m = 0.28              # elbow to IMU
+pre_stop_swing_deg = 6        # body swing creeping in over the reps before the stop point
+bad_swing_deg = 20
+bad_drift_deg = 18
+partial_rom = 0.55
+label_error_prob = 0.25       # chance the video stop point is off by one rep
+effort_world_reps = 15        # set length when there is no fatigue
+
+# Test worlds: overrides of the values above.
+[sim.worlds.normal]
+
+[sim.worlds.emg_blind]        # EMG carries no fatigue information; the model must get no EMG skill
+mdf_drop = 0.0
+loud_rise = 0.0
+
+[sim.worlds.shortcut]         # stop point fully predictable from time into the set; baselines should win
+reps_to_stop_spread = 0.0
+stop_level_spread = 0.0
+fatigue_spread = 0.0
+recovery_tau_s = 0.001
+label_error_prob = 0.0
+
+[sim.worlds.effort]           # effort swings but no fatigue; must never warn
+reps_to_stop_fresh = 0
+effort_prob = 0.35
+
+# ---------------------------------------------------------------- step 3: scoring
+[eval]
+grid_s = 0.5                  # score every model on this grid, using its latest prediction
+seconds_per_rep = 2.0         # metronome pace: converts rep-based rules to seconds
+warn_s = [4.0, 2.0]           # the "2 reps" and "1 rep" warnings
+false_alarm_s = [8.0, 6.0]    # a warning is false if it fires with more than this left (4+ / 3+ reps)
+
+# ---------------------------------------------------------------- step 4: cleaning
+[clean]
+band_hz = [20, 450]
+fir_band_hz = [14, 455]       # filter cutoffs, set outside band_hz so the band itself is flat (-0.5 dB at 20 Hz)
+fir_taps = 401                # linear-phase band-pass: every frequency delayed (taps-1)/2 samples (100 ms at 2 kHz)
+                              # 201 taps cut 20 Hz by 6 dB and 25 Hz by 3 dB: real EMG lost, middle pitch biased up
+fir_kaiser_beta = 6.0         # higher = more stopband rejection, wider transition
+baseline_tau_s = 2.0          # running estimate of the mid-rail level, subtracted before filtering
+nfft = 512                    # every spectrum is zero-padded to this, so all spectra share bins (3.9 Hz at 2 kHz)
+hum_hz = [60, 120, 180]
+hum_halfwidth_hz = 6          # spectrum bins within this of a hum or packet line are dropped and filled from neighbours
+noise_subtract = 1.0          # share of the rest recording's noise spectrum subtracted from each spectrum (0 = off)
+jolt_hz = 15                  # motion jolts live below this
+jolt_mv = 10                  # a jolt is a low-frequency swing bigger than this...
+jolt_ratio = 1.0              # ...and bigger than this times the in-band EMG loudness (real squeezes: median 0.2, p99 0.5-1.0)
+jolt_pad_s = 0.05             # also skip this long either side of a jolt
+# rest check (run on every session's rest recording)
+max_hum_mv = 2.0              # redo the rest recording above this 60 Hz hum (sensor testing: 0.4-1.3 mV)
+line_ratio = 10               # a narrow peak this many times its neighbourhood is a line
+line_min_mv = 0.1             # ...and at least this strong (weaker ones are ignored)
+line_problem_mv = 0.4         # a non-mains line this strong, or a family of 3+ harmonics, fails the rest check
+mains_tolerance_hz = 1.0      # a line within this of 60/120/180... is mains hum
+
+# ---------------------------------------------------------------- step 5: forearm angle and angle bins
+[angle]
+# Ported from RepSense (src/labels.py track_down / hang_axis / segment_angle), run one-way.
+track_tau_s = 1.0             # RepSense TRACK_TAU_S: the accelerometer pulls "down" back over ~1 s
+                              # (dt/(tau+dt) = 0.0196 per sample at 50 Hz: the 98% gyro / 2% accelerometer blend)
+hang_s = 0.3                  # RepSense START_S: "hanging" = median down over the stillest 0.3 s before the first lift
+shove_dps_per_g = 200         # RepSense SHOVE_DPS_PER_G: stillness score = gyro speed + this x |accel - 1 g|
+freeze_deg = 30               # hanging is fixed once the forearm turns this far from it (twisting doesn't count)
+move_dps = 20                 # lifting / lowering only when the angle changes faster than this (RepSense GYRO_FLOOR_DPS)
+max_imu_gap_s = 0.1           # no angle across an IMU gap longer than this
+
+[bins]
+centres_deg = [15, 30, 45, 60, 75, 90, 105, 120, 135]
+halfwidth_deg = 15            # each bin reaches this far either side of its centre, weight fading to 0
+lowering = true               # also keep lowering passes, in their own bins
+min_weight = 30               # drop passes with fewer weighted samples than this (15 ms)
+min_span = 150                # ...or spanning fewer samples: middle pitch reads 5-9% high below this (+-2% from 260 up)
+merge_gap_s = 0.3             # a slow, grinding lift that stalls inside a bin is one pass, not several
