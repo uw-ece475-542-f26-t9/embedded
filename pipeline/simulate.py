@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+from scipy import signal
 from scipy.spatial.transform import Rotation
 
 from .capture import EMG, IMU, STATUS, emg_payload, frame, imu_payload, status_payload
@@ -136,6 +137,7 @@ class Person:
     scale: float           # skin/electrode loudness scale
     clock_hz: float        # the board's real EMG rate
     strength_kg: float
+    tremor_hz: float       # this person's physiological tremor frequency
     rest_order: tuple
     mount: np.ndarray      # IMU mount rotation (3x3)
 
@@ -160,6 +162,7 @@ def make_person(i: int, c: dict, rng: np.random.Generator) -> Person:
         scale=float(np.exp(rng.normal(0, c["loudness_scale_spread"]))),
         clock_hz=NOMINAL_HZ * (1 + float(rng.normal(0, c["board_clock_spread"]))),
         strength_kg=float(rng.uniform(15, 30)),
+        tremor_hz=float(rng.uniform(*c["tremor_hz"])),
         rest_order=tuple(order),
         mount=Rotation.from_rotvec(tilt).as_matrix(),
     )
@@ -361,6 +364,15 @@ def signals(tr: Track, p: Person, c: dict, rng: np.random.Generator) -> dict:
     gyro = np.c_[np.interp(imu_t, t, tr.twist_dps), -np.degrees(th_d), np.zeros_like(th)]
     accel = accel @ p.mount.T + rng.normal(0, c["accel_noise_g"], accel.shape)
     gyro = gyro @ p.mount.T + rng.normal(0, c["gyro_noise_dps"], gyro.shape) + rng.normal(0, 0.2, 3)
+    # Physiological tremor: a narrow wobble near the person's tremor frequency, growing with
+    # tiredness, on every gyro axis (vector RMS = tremor_dps when fresh). Size is an assumption.
+    if c["tremor_dps"]:
+        band = [max(0.5, p.tremor_hz - 1.5), min(IMU_HZ / 2 - 0.5, p.tremor_hz + 1.5)]
+        sos = signal.butter(2, band, btype="bandpass", fs=IMU_HZ, output="sos")
+        wobble = signal.sosfilt(sos, rng.standard_normal((len(imu_t) + 200, 3)), axis=0)[200:]
+        wobble /= np.sqrt(np.mean(np.sum(wobble**2, axis=1)))
+        grow = 1 + c["tremor_rise"] * np.minimum(np.interp(imu_t, t, x), 1.3)
+        gyro += c["tremor_dps"] * grow[:, None] * wobble
 
     keep = np.arange(0, n, max(1, int(round(p.clock_hz / IMU_HZ))))
     truth = {"t": t[keep], "F": tr.F[keep], "x": x[keep], "mdf_hz": mdf[keep], "loudness": loud[keep],

@@ -21,11 +21,15 @@ change goes in the log at the bottom with the date and the reason.
 - **exploratory** = reported, never the headline
 - **shortcut** = recreates the clock baseline; kept out of the model, used only as a baseline
 
-## Core model (locked 2026-11-16, before any real data)
+## Core model (locked 2026-11-16, before any real data; serves as the baseline feature set)
 **#1 middle pitch change, #8 loudness change, #13a middle pitch slope, #15 speed loss, #17 top-angle
 change, #22 tremor.** The headline result is this model, fitted and scored by leave-one-person-out.
 Changing it after seeing real results makes the main result meaningless; any change before then goes
 in the log with the reason. Core features are also in the random-subset search, like any candidate.
+
+**Role (Adi, 2026-11-17):** core-v1 is kept unchanged as the baseline feature set. The best features
+are chosen empirically by the nested random-subset search; core-v1 is the reference they're compared
+against. The step 7 simulation findings below are noted, not acted on.
 
 ## A. EMG frequency (pooled pass spectra, each bin vs its own fresh baseline)
 | # | Feature | Computation | Tired | Proposed by | Status |
@@ -75,6 +79,11 @@ in the log with the reason. Core features are also in the random-subset search, 
 | 24c | Rest before the set | Seconds | Adi | shortcut (baseline 3) |
 | 25 | Set-1 personalisation | This person's #1 and #8 change at their set-1 stop point, used in sets 2–3 | Adi | secondary result |
 
+## F. Across sets
+| # | Feature | Computation | Tired | Proposed by | Status |
+|---|---|---|---|---|---|
+| 26 | Session-relative middle pitch | #1 computed against **set 1's** baseline bins instead of this set's own start, so sets 2–3 start below 1.0 by the tiredness carried over from the last rest; available from a set's first lift. Risk: electrodes and sweat drift over ~10 min | ↓ | Adi | candidate |
+
 ## Selection protocol: random-subset ranking (Adi's method, as run in RepSense)
 Fixed here before any real data, mirroring RepSense FEATURES.md (2026-11-04 entry).
 1. **Nested by person.** For each held-out person, the whole ranking runs on the other 7 only, scored
@@ -95,6 +104,13 @@ Fixed here before any real data, mirroring RepSense FEATURES.md (2026-11-04 entr
 8. **Reporting.** The pre-registered core model is the headline. The search result is exploratory
    and needs new data to be claimed.
 
+Implementation (2026-11-17, `pipeline/search.py`): subset score = −(mean absolute error in seconds) of a
+straight line, leave-one-person-out within the training people. Inner folds share the outer fold's
+Kalman q and r (fitted on the training people; the held-out person is never involved). All subsets'
+lines are solved in one batch: a full nested run (10,000 subsets, 20 shuffles, 20 bootstraps, 8 people)
+takes about a minute. The planted test passes (one deciding feature among ten: only it is kept).
+Training and selection run on real recordings only; simulated data is used only to test the code.
+
 Cost note: 10,000 subsets × 8 held-out people × 7 inner folds = 560,000 fits. Fine for straight-line
 models (seconds each, parallel); the small neural net only for the final chosen set.
 
@@ -103,3 +119,9 @@ models (seconds each, parallel); the small neural net only for the final chosen 
 |---|---|---|
 | 2026-11-16 | List created: 25 features (13 split into 13a/13b, 24 into 24a–c). Proposed core: #1, #8, #13a, #15, #17, #22 (not yet agreed) | Starting point for discussion; selection protocol fixed before any data |
 | 2026-11-16 | **Core locked:** #1, #8, #13a, #15, #17, #22 (Adi) | Pre-registered so the headline is a real test: with 8 people, features picked after seeing results would be partly picked for luck. The nested search stays as the exploratory result |
+| 2026-11-16 | Note on #22 (tremor), no status change | Simulated check: with tremor growth switched off, jerky bad reps (swing, partial, failed) still raise the 7–14 Hz band ~25%, so #22 partly measures form-breakdown jerkiness, not only tremor. Slowing alone doesn't fake it (good lifts: corr 0.20 with tiredness) |
+| 2026-11-17 | Added #26 (session-relative middle pitch), candidate | Each set is otherwise compared with its own start, which hides the tiredness carried over from a short rest: the information the oracles showed matters most |
+| 2026-11-17 | Clarification, no status change: the model reads #1, #8 and #26 as their Kalman-filtered level (step 7), and #22 and #15 as filtered levels; #13a/#13b are the filters' slope states; #17 is unfiltered | Same features, less noise (one lift scatters ~8.4%). #17 is an event (one bad rep), so smoothing would delay it |
+
+| 2026-11-17 | **Simulation findings, step 7 (no status change; core-v1 kept as the baseline set, Adi).** Per set, the middle-pitch slope #13a is mostly noise: true slopes differ between sets by sd 0.46%/s, a straight line through one set's values misses by sd 0.85%/s (signal/noise 0.55; Kalman slope vs truth corr ≈ 0). Loudness slope #13b: 1.97%/s vs 0.55%/s (signal/noise 3.6; corr 0.50), but that rests on the simulator's 40% loudness rise vs 15% pitch drop, and loudness also rises with effort. #26 shows carried-over tiredness: set 2's first lifts read 0.943 ± 0.022 after a 60 s rest vs 1.005 ± 0.019 after 180 s (EMG-blind world ~0.99). Per-lift middle-pitch noise is ~10% and bell-shaped (excess kurtosis 0.1). Options noted for later: keep #13a, swap to #13b, or swap to #26 | Found before any real data. To be settled empirically by the search, with core-v1 as the reference |
+| 2026-11-17 | **Step 6b: all 20 candidate features now computed** (#2, #3, #4, #6, #9, #10, #11, #16, #18, #19, #20, #21 added; statuses unchanged). #21 is axis wobble only, ported from RepSense `labels.lift_motion`; RepSense's hinge residual was never implemented there and isn't here. #6 uses the lowering just *before* each lift, so it adds no delay. Simulated checks (12 people): every EMG spectral feature moves with fatigue in the normal world and not in the EMG-blind one; #3 Dimitrov and #4 move ~7× more than middle pitch and *opposite* to effort surges. Caveats: #10 fatigue index is only partly effort-proof (simulated effort raises loudness 4× more than pitch); #11 EMG cost is half speed loss, so not EMG-only. The simulator has no bottom shortfall, sticking points or sideways wobble, so #18, #20 and #21 were checked on real RepSense wrist recordings instead: partial sets bottom +49° vs normal +4°; exhaustion sets sticking dip 0.38 vs 0.02 and lateness 1.0 s vs 0.1 s; #21 drift 2.2° vs normal 0.8°, but alternating, pause and slow sets also 2.4–2.9° (not specific) | Gives the search the full candidate pool: 20 features, 38,760 possible 6-feature subsets |

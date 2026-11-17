@@ -55,6 +55,7 @@ class AngleTrack:
     rate_dps: np.ndarray     # how fast it changes (+ = rising)
     direction: np.ndarray    # +1 lifting, -1 lowering, 0 neither
     hang_known_s: float      # when hanging was fixed: no angle is known before this (NaN if never)
+    forearm_axis: np.ndarray | None = None  # "up" while hanging, in sensor coordinates: along the forearm
 
     def at(self, t_emg: np.ndarray, max_gap_s: float) -> tuple[np.ndarray, np.ndarray]:
         """Angle and direction at each EMG sample. Interpolating needs the next IMU sample, so this
@@ -101,4 +102,5 @@ def forearm_angle(s: Session, cfg: dict) -> AngleTrack:
     rate = np.where(np.isnan(rate), 0.0, rate)
     direction = np.where(rate > c["move_dps"], 1, np.where(rate < -c["move_dps"], -1, 0))
     return AngleTrack(t=t, angle_deg=angle, rate_dps=rate, direction=direction,
-                      hang_known_s=float(t[known]) if known is not None else float("nan"))
+                      hang_known_s=float(t[known]) if known is not None else float("nan"),
+                      forearm_axis=up if known is not None else None)

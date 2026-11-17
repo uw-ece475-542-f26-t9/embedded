@@ -54,6 +54,9 @@ mount_tilt_deg = 10
 accel_noise_g = 0.01
 gyro_noise_dps = 0.5
 forearm_m = 0.28              # elbow to IMU
+tremor_dps = 1.5              # physiological tremor at the wrist, RMS, when fresh (ASSUMED, not measured)
+tremor_rise = 1.0             # tremor grows by this share by the stop point (x2)
+tremor_hz = [8, 12]           # each person's tremor frequency is drawn from this range
 pre_stop_swing_deg = 6        # body swing creeping in over the reps before the stop point
 bad_swing_deg = 20
 bad_drift_deg = 18
@@ -127,3 +130,145 @@ lowering = true               # also keep lowering passes, in their own bins
 min_weight = 30               # drop passes with fewer weighted samples than this (15 ms)
 min_span = 150                # ...or spanning fewer samples: middle pitch reads 5-9% high below this (+-2% from 260 up)
 merge_gap_s = 0.3             # a slow, grinding lift that stalls inside a bin is one pass, not several
+
+# ---------------------------------------------------------------- step 6: features
+[features]
+baseline_lifts = 3            # the set's first lifts: every feature is relative to them
+min_lift_deg = 40             # a lift must rise at least this far
+lift_merge_gap_s = 0.3        # a short stall mid-lift doesn't split it
+top_wait_s = 1.5              # the top is final when lowering starts, or this long after the rise ends
+min_bins = 4                  # a lift needs this many angle bins with a baseline for EMG features
+min_baseline_passes = 2       # a bin needs this many baseline passes to have a baseline
+pool = "equal"                # "equal": each bin divided by its own baseline power before pooling; "power": raw sum
+pass_window = "fixed"         # "fixed": every pass analysed over the same number of samples, centred where the arm
+                              # crosses the bin, so the short-window bias (step 5: +3-9% below 200 samples) can't
+                              # change with lift speed; "pass": the pass's own triangle weights. Over 8 seeds neither
+                              # showed a measurable slowing effect (+-2%); fixed is kept because it can't have one
+fixed_window = 384            # samples (192 ms at 2 kHz), Hann. Over 6 seeds: 384 = 8.4% per-lift scatter, the
+                              # same as "pass"; 256 = 8.9%
+tremor_band_hz = [7, 14]      # tremor = gyro wobble in this band during the lift (curls are under 3 Hz)
+
+# ---------------------------------------------------------------- step 7: Kalman filters
+# One filter per feature. q (process noise per second) and r (one lift's measurement variance) are
+# fitted by maximum likelihood on the training people; the values here are starting points.
+[kalman]
+q_floor = 1e-7                  # trend filters: lowest q the fit may choose (slope can drift ~0.14%/s per 20 s).
+                                # Simulated fatigue is a straight line, so the fit alone picks q ~ 0
+[kalman.filters.mdf_ratio]      # #1 level and #13a slope
+model = "trend"
+q = 1e-5
+r = 0.007                       # 8.4% per-lift scatter, squared (simulation)
+level0 = 1.0
+level_sd0 = 0.05                # the baseline itself is uncertain (3 lifts)
+slope_sd0 = 0.01                # starting slope uncertainty: 1% per second
+
+[kalman.filters.loud_ratio]     # #8 level and #13b slope
+model = "trend"
+q = 1e-5
+r = 0.01
+level0 = 1.0
+level_sd0 = 0.06
+slope_sd0 = 0.01
+
+[kalman.filters.mdf_session]    # #26: starts from its first value (sets 2-3 start below 1.0)
+model = "trend"
+q = 1e-5
+r = 0.007
+level_sd0 = 0.1
+slope_sd0 = 0.01
+
+[kalman.filters.tremor_ratio]   # #22 level
+model = "level"
+q = 1e-3
+r = 0.05
+level0 = 1.0
+level_sd0 = 0.1
+
+[kalman.filters.speed_loss]     # #15 level, light smoothing
+model = "level"
+q = 1e-3
+r = 0.002
+level0 = 0.0
+level_sd0 = 0.05
+[kalman.filters.mnf_ratio]       # #2
+model = "trend"
+q = 1e-5
+r = 0.005
+level0 = 1.0
+level_sd0 = 0.05
+slope_sd0 = 0.01
+
+[kalman.filters.dimitrov_ratio]  # #3 (moves several times more than middle pitch)
+model = "trend"
+q = 1e-4
+r = 0.1
+level0 = 1.0
+level_sd0 = 0.3
+slope_sd0 = 0.05
+
+[kalman.filters.lowhigh_ratio]   # #4
+model = "trend"
+q = 1e-4
+r = 0.05
+level0 = 1.0
+level_sd0 = 0.2
+slope_sd0 = 0.03
+
+[kalman.filters.mdf_lower_ratio] # #6
+model = "trend"
+q = 1e-5
+r = 0.01
+level0 = 1.0
+level_sd0 = 0.06
+slope_sd0 = 0.01
+
+[kalman.filters.loud_max]        # #9: no fixed start (share of max pull)
+model = "trend"
+q = 1e-5
+r = 0.01
+level_sd0 = 0.2
+slope_sd0 = 0.01
+
+[kalman.filters.fatigue_index]   # #10
+model = "trend"
+q = 1e-5
+r = 0.01
+level0 = 0.0
+level_sd0 = 0.05
+slope_sd0 = 0.01
+
+[kalman.filters.emg_cost]        # #11
+model = "trend"
+q = 1e-5
+r = 0.02
+level0 = 1.0
+level_sd0 = 0.08
+slope_sd0 = 0.01
+
+[kalman.filters.duration_ratio]  # #16
+model = "level"
+q = 1e-3
+r = 0.003
+level0 = 1.0
+level_sd0 = 0.05
+# #17, #18, #19, #20 and #21 are not filtered: each is an event in one rep.
+
+# ---------------------------------------------------------------- step 8: model and feature search
+[model]
+ridge_lambda = 1.0            # straight-line model's shrinkage (features standardised)
+max_seconds = 120             # predictions clipped to 0..this
+net_param_share = 0.5         # RepSense rule: a neural net's weights <= this share of training rows
+net_max_hidden = 12
+net_epochs = 600
+net_lr = 0.01
+net_l2 = 0.01
+net_ensemble = 5              # nets averaged over this many random starts (one start is unstable on small data)
+physics_feature = "1"         # physics-style comparison: distance to the breaking level / slope, for this feature
+
+[search]                      # random-subset ranking (FEATURES.md protocol), real data only
+subsets = 10000
+size = 6
+shuffles = 20
+bootstrap = 20
+keep_share = 0.7
+seed = 0

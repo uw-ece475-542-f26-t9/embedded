@@ -11,6 +11,10 @@ Signal processing and ML for the bicep fatigue wearable. The plan and design rul
 | 3 | Scoring harness: leave-one-person-out, 3 clock baselines, warning misses / false alarms / lead / error, cheating oracle to check the referee | Done |
 | 4 | Cleaning: real-time linear-phase band-pass, jolt skipping, hum/interference lines dropped from spectra, noise floor subtracted, rest check | Done |
 | 5 | Forearm angle (RepSense port, one-way) and soft angle bins: 9 lifting + 9 lowering, one pass per sweep | Done |
+| 6 | Per-lift features, relative to the set's first 3 lifts: core #1, #8, #15, #17, #22 (#13a is step 7), and #26 against set 1 | Done |
+| 6b | The remaining 12 candidate features (#2–4, #6, #9–11, #16, #18–21): all 20 candidates now computed | Done |
+| 7 | Kalman filters: level + slope per feature, q and r fitted by maximum likelihood on training people, innovation check | Done |
+| 8 | Models (ridge, small net under the size rule, physics-style comparison) and the nested random-subset search; feature cache. Trained on real data only | Built (code-tested) |
 
 ## Use
 ```bash
@@ -56,6 +60,10 @@ s.problems(cfg), s.notes()
 | `pipeline/clean.py` | Step 4: `clean_emg`, `spectrum`, `middle_pitch`, `rest_check` and its spectrum cleaner |
 | `pipeline/angle.py` | Step 5a: `forearm_angle`, ported from RepSense `track_down` / `hang_axis` / `segment_angle` |
 | `pipeline/bins.py` | Step 5b: `find_passes`, `pass_spectrum` |
+| `pipeline/features.py` | Step 6: `find_lifts`, `lift_features`, `cleaner_for` |
+| `pipeline/kalman.py` | Step 7: `run_filter`, `filter_rows`, `fit`, `innovation_check` |
+| `pipeline/model.py` | Step 8: `FatigueModel`, `PhysicsModel`, feature cache, `CORE_V1` |
+| `pipeline/search.py` | Step 8b: random-subset ranking (`rank`), `SearchedModel` (fully nested) |
 | `pipeline/evaluate.py` | Step 3 harness: `SetData`, `load_sets`, `evaluate`, `report`, `causal_check` |
 | `pipeline/models.py` | Baselines and the oracle |
 | `tests/` | Tests |
