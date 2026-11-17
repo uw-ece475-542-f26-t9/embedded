@@ -259,3 +259,23 @@ def rest_check(rest: Session, cfg: dict) -> RestCheck:
                         + ": find the source and redo the rest recording (they are dropped from spectra either way)")
     return RestCheck(hum_mv=round(hum, 2), noise_mv=round(noise_mv, 2), lines=lines, noise_spectrum=noise,
                      problems=problems)
+
+
+def alias_check(rest: Session, rest_alt: Session, cfg: dict) -> dict:
+    """The spike check (protocol step 3): rest recorded at two ADC rates. Real signals and interference
+    in the band (hum, USB packets) sit at the same frequency in both; anything above the band that
+    folded down (aliasing; the board has no anti-aliasing capacitor) lands somewhere else at the other
+    rate. A narrow peak present in one recording but not the other moved: that's aliasing."""
+    tol = cfg["lab"]["alias_tolerance_hz"]
+    a, b = rest_check(rest, cfg), rest_check(rest_alt, cfg)
+    fa = [hz for hz, _, _ in a.lines]
+    fb = [hz for hz, _, _ in b.lines]
+    moved = sorted({*(f for f in fa if not any(abs(f - g) <= tol for g in fb)),
+                    *(g for g in fb if not any(abs(g - f) <= tol for f in fa))})
+    stayed = sorted(f for f in fa if any(abs(f - g) <= tol for g in fb))
+    problems = []
+    if moved:
+        problems.append("peaks that move between the two rates (aliasing: interference above the band folding "
+                        f"in): {', '.join(f'{f:g} Hz' for f in moved)}. Move or unplug nearby devices, redo both "
+                        "rest recordings")
+    return {"moved_hz": moved, "stayed_hz": stayed, "problems": problems}

@@ -5,7 +5,7 @@ capture mode (CAPTURE_MODE 1), names it the protocol's way, runs the cues, and c
     python -m pipeline.lab P01 --only rest             # one step
 
 Steps, in protocol order (DATA_COLLECTION_PROTOCOL.md §2):
-    rest -> pull_base1..3 -> set1 -> pull1 -> [rest] -> set2 -> pull2 -> [rest] -> set3 -> pull3 -> pull_recovery
+    rest -> rest_alt (aliasing check) -> pull_base1..3 -> set1 -> pull1 -> [rest] -> set2 -> pull2 -> [rest] -> set3 -> pull3 -> pull_recovery
 Each recording is <data_dir>/<P01>_<step>.bin (the raw stream, as received) plus .json (who, what,
 cue markers on the recording's clock, empty labels for the video raters).
 
@@ -38,11 +38,11 @@ from typing import Callable
 import numpy as np
 
 from .capture import EMG, STATUS, STATUS_FMT, EMG_HEAD, FrameReader
-from .clean import rest_check
+from .clean import alias_check, rest_check
 from .config import ROOT, load_config
 from .load import load_session
 
-STEPS = ["rest", "pull_base1", "pull_base2", "pull_base3", "set1", "pull1", "set2", "pull2", "set3", "pull3",
+STEPS = ["rest", "rest_alt", "pull_base1", "pull_base2", "pull_base3", "set1", "pull1", "set2", "pull2", "set3", "pull3",
          "pull_recovery"]
 
 
@@ -177,7 +177,7 @@ class Recorder:
 
 
 def kind_of(step: str) -> str:
-    return "rest" if step == "rest" else "set" if step.startswith("set") else "pull"
+    return "rest" if step.startswith("rest") else "set" if step.startswith("set") else "pull"
 
 
 class Session:
@@ -226,10 +226,20 @@ class Session:
         return result
 
     def _rest(self, step: str) -> Recording:
-        self.sound.say("Rest recording. Forearm supported, palm up, hand limp. Keep still.")
+        alt = step == "rest_alt"
+        if alt:  # the aliasing check: the same rest at another ADC rate (firmware capture-mode command)
+            self._command(f"RATE {self.c['alt_adc_hz']}")
+        self.sound.say("Rest recording" + (" again" if alt else "") + ". Forearm supported, palm up, hand limp. Keep still.")
         dur = self.c["rest_record_s"]
-        return self.rec.record(self.path(step), [Cue(dur - 0.05, lambda: self.sound.say("Done"))],
-                               until=lambda t, _: t >= dur)
+        try:
+            return self.rec.record(self.path(step), [Cue(dur - 0.05, lambda: self.sound.say("Done"))],
+                                   until=lambda t, _: t >= dur)
+        finally:
+            if alt:
+                self._command(f"RATE {self.c['adc_hz']}")
+
+    def _command(self, text: str) -> None:
+        self.rec.port.write((text + "\n").encode())
 
     def _pull(self, step: str) -> Recording:
         lead, pull = self.c["pull_lead_s"], self.c["pull_s"]
@@ -277,6 +287,15 @@ class Session:
             rc = rest_check(s, self.cfg)
             out["problems"] = problems + rc.problems
             out["rest"] = {"hum_mv": rc.hum_mv, "noise_mv": rc.noise_mv, "lines": rc.lines}
+            if step == "rest_alt":
+                expect = self.c["alt_adc_hz"] / 4
+                if abs(s.emg_hz - expect) > 0.02 * expect:
+                    out["problems"].append(f"recorded at {s.emg_hz:.0f} samples/s, expected {expect:.0f}: did the "
+                                           "board take the RATE command? (needs the firmware with it)")
+                elif self.path("rest").exists():
+                    ac = alias_check(load_session(self.path("rest"), self.cfg), s, self.cfg)
+                    out["problems"] += ac["problems"]
+                    out["alias"] = ac
         elif kind == "set" and len(s.imu_t):
             from .angle import forearm_angle
             from .features import find_lifts
@@ -297,6 +316,9 @@ class Session:
         if "rest" in result:
             r = result["rest"]
             print(f"    rest: hum {r['hum_mv']} mV, noise {r['noise_mv']} mV, peaks {[hz for hz, _, _ in r['lines']]}")
+        if "alias" in result:
+            a = result["alias"]
+            print(f"    aliasing check: peaks that stayed {a['stayed_hz']}, peaks that moved {a['moved_hz'] or 'none'}")
         if "lifts_seen" in result:
             print(f"    lifts seen: {result['lifts_seen']}")
         if "pull_rms_mv" in result:

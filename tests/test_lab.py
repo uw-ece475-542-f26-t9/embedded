@@ -43,6 +43,9 @@ class FakePort:
             self.queue.append((due, frame(ftype, p)))
         self.clock, self.step = clock, step
 
+    def write(self, data):
+        self.written = getattr(self, "written", []) + [data]
+
     def read(self, n):
         self.clock.now += self.step
         out = bytearray()
@@ -126,7 +129,7 @@ def test_steps_follow_the_protocol_and_rest_order(tmp_path):
     ses = Session("P02", CFG, recorder=None, sound=Quiet(), data_dir=tmp_path)
     assert ses.next_steps() == STEPS
     (tmp_path / "P02_rest.bin").write_bytes(b"")
-    assert ses.next_steps()[0] == "pull_base1"
+    assert ses.next_steps()[0] == "rest_alt"
     assert ses.rest_before(1) is None and ses.rest_before(2) == 180 and ses.rest_before(3) == 60
 
 
@@ -172,3 +175,28 @@ def test_unlabelled_sets_are_skipped_not_crashed_on(sim, tmp_path):
     meta["labels"] = {"set_start_s": None, "stop_point_s": None, "failure_s": None}
     side.write_text(json.dumps(meta))
     assert {s.name for s in load_sets(tmp_path)} == {"P01_set1", "P01_set3"}
+
+
+def test_rest_alt_switches_the_rate_and_checks_the_board_took_it(sim, tmp_path):
+    (tmp_path / "P01_rest.bin").write_bytes((sim / "P01_rest.bin").read_bytes())
+    ses = session(sim, tmp_path, "rest")       # the simulated stream stays at 2,000/s: the board "ignored" it
+    result = ses.run("rest_alt")
+    assert ses.rec.port.written == [b"RATE 8400\n", b"RATE 8000\n"]
+    assert any("RATE command" in p for p in result["problems"])
+
+
+def test_alias_check_flags_peaks_that_move_between_rates():
+    from pipeline.clean import alias_check
+    from pipeline.session import Session
+    rng = np.random.default_rng(5)
+    t = np.arange(40000) / 2000.0
+
+    def rest(alias_hz):
+        x = 1440 + rng.normal(0, 3, len(t)) + 1.5 * np.sin(2 * np.pi * 60 * t) + 1.0 * np.sin(2 * np.pi * alias_hz * t)
+        return Session(name="r", source="legacy", emg=x, emg_hz=2000.0)
+
+    out = alias_check(rest(150.0), rest(250.0), CFG)    # a folded-in peak lands elsewhere at the other rate
+    assert any(abs(f - 150) < 2 for f in out["moved_hz"]) and any(abs(f - 250) < 2 for f in out["moved_hz"])
+    assert any(abs(f - 60) < 2 for f in out["stayed_hz"]) and out["problems"]
+    same = alias_check(rest(150.0), rest(150.0), CFG)  # a real peak stays put: no aliasing problem
+    assert not same["problems"]

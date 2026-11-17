@@ -28,7 +28,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from .clean import rest_check
+from .clean import alias_check, rest_check
 from .config import ROOT, load_config
 from .evaluate import evaluate, load_sets, md_table, summarize
 from .load import load_session
@@ -55,8 +55,10 @@ def health_table(folder: Path, cfg: dict) -> pd.DataFrame:
     for p in sorted(folder.glob("*.bin")):
         s = load_session(p, cfg)
         problems = s.problems(cfg)
-        if p.stem.endswith("_rest"):
+        if p.stem.endswith("_rest") or p.stem.endswith("_rest_alt"):
             problems += rest_check(s, cfg).problems
+        if p.stem.endswith("_rest_alt") and p.with_name(p.stem[:-4] + ".bin").exists():
+            problems += alias_check(load_session(p.with_name(p.stem[:-4] + ".bin"), cfg), s, cfg)["problems"]
         rows.append({"recording": p.stem, "seconds": round(s.duration_s, 1), "ok": not problems,
                      "problems": "; ".join(problems)})
     return pd.DataFrame(rows)
