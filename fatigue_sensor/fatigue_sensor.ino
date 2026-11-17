@@ -12,8 +12,12 @@
 #include "fatigue_model.h"
 #include "rep_counter.h"
 
-// 1 = binary USB capture for tools/record.py, 0 = normal text logs.
+// 1 = binary USB capture for tools/record.py and pipeline.lab, 0 = normal text logs.
+// Can be set at build time without editing: --build-property "compiler.cpp.extra_flags=-DCAPTURE_MODE=1"
+// (not build.extra_flags: that replaces the board's own flags and breaks the Adafruit libraries)
+#ifndef CAPTURE_MODE
 #define CAPTURE_MODE 0
+#endif
 #define CAPTURE_BAUD 921600
 
 #if CAPTURE_MODE
@@ -30,7 +34,9 @@
 #define EMG_CHAR_UUID      "53e27fb3-6de1-4f27-8303-d663c79b818b"
 #define REP_CHAR_UUID      "65719722-b91f-43b3-adbc-7c455a80c50c"
 
-#define EMG_PIN            1    // XIAO A0 / D0
+#ifndef EMG_PIN
+#define EMG_PIN            1    // XIAO A0 / D0 (the dev kit used in sensor testing had RAW on GPIO 4)
+#endif
 #define IMU_SDA_PIN        5    // XIAO D4, shared with DRV2605L
 #define IMU_SCL_PIN        6    // XIAO D5, shared with DRV2605L
 #define SNAPSHOT_PERIOD_MS 100  // EMG: 10 snapshots/s
@@ -166,8 +172,8 @@ void onEmgSample(float mv, uint8_t clipped) {
 void sendStatus(uint32_t now) {
   capture::Payload p;
   p.u8(capture::VERSION);
-  p.u16(EmgAdc::OUT_HZ);
-  p.u16(EmgAdc::ADC_HZ);
+  p.u16(emgAdc.outHz());
+  p.u16(emgAdc.adcHz());
   p.u16(1000 / IMU_PERIOD_MS);
   p.u16(capture::EMG_PER_MV);
   p.u32(emgAdc.samples());
@@ -458,6 +464,26 @@ void reportFailure() {
   LOGLN("New set");
 }
 
+#if CAPTURE_MODE
+// Capture mode takes one text command from the computer: "RATE <hz>\n" sets the ADC rate (the
+// aliasing check records rest at two rates). Everything the board sends stays binary frames; the
+// new rate shows up in the next STATUS frame.
+void handleCaptureCommands() {
+  static char line[24];
+  static uint8_t n = 0;
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      line[n] = 0;
+      if (n > 5 && strncmp(line, "RATE ", 5) == 0) emgAdc.setRate((uint32_t)atol(line + 5));
+      n = 0;
+    } else if (n < sizeof(line) - 1) {
+      line[n++] = c;
+    }
+  }
+}
+#endif
+
 #if !CAPTURE_MODE
 void handleSerial() {
   while (Serial.available()) {
@@ -566,6 +592,7 @@ void loop() {
 #endif
 
 #if CAPTURE_MODE
+  handleCaptureCommands();
   if (now - lastStatusMs >= 1000) {
     lastStatusMs += 1000;
     sendStatus(now);

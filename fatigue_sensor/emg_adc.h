@@ -18,9 +18,12 @@
 
 class EmgAdc {
  public:
-  static constexpr uint32_t ADC_HZ = 8000;
+  static constexpr uint32_t ADC_HZ = 8000;  // default rate; setRate() can change it at run time
   static constexpr uint32_t DECIMATION = 4;
   static constexpr uint32_t OUT_HZ = ADC_HZ / DECIMATION;
+  // Rates setRate() accepts. The FIR's cutoff scales with the rate (a quarter of it), so any rate in
+  // this range still decimates by 4 safely.
+  static constexpr uint32_t MIN_HZ = 6000, MAX_HZ = 12000;
 
   // Hamming-windowed sinc, 31 taps, 1 kHz cutoff at 8 kHz: flat within
   // 0.05 dB to 500 Hz, -6 dB at 1 kHz, at least 50 dB down from 1.6 kHz
@@ -37,10 +40,12 @@ class EmgAdc {
       -0.002079629f, -0.002053361f, -0.001203880f};
 
   // Returns false if the pin isn't an ADC pin or the driver won't start.
-  bool begin(int pin) {
+  bool begin(int pin, uint32_t adcHz = ADC_HZ) {
     adc_unit_t unit;
     adc_channel_t channel;
     if (adc_continuous_io_to_channel(pin, &unit, &channel) != ESP_OK) return false;
+    pin_ = pin;
+    rate = adcHz;
 
     // 64 readings (8 ms) per DMA frame, and room for 128 ms in the driver's
     // pool, so loop() can be held up for a while without losing data.
@@ -58,7 +63,7 @@ class EmgAdc {
     adc_continuous_config_t cfg = {};
     cfg.pattern_num = 1;
     cfg.adc_pattern = &pattern;
-    cfg.sample_freq_hz = ADC_HZ;
+    cfg.sample_freq_hz = rate;
     cfg.conv_mode = unit == ADC_UNIT_1 ? ADC_CONV_SINGLE_UNIT_1 : ADC_CONV_SINGLE_UNIT_2;
     cfg.format = ADC_DIGI_OUTPUT_FORMAT_TYPE2;
     if (adc_continuous_config(handle, &cfg) != ESP_OK) return false;
@@ -116,6 +121,24 @@ class EmgAdc {
     }
   }
 
+  // Changes the ADC rate (for the aliasing check: interference above the band folds to a different
+  // frequency at a different rate, real signals don't). Stops and restarts the driver; samples()
+  // keeps counting, so streams stay on one index. Returns false (rate unchanged) if out of range or
+  // the driver won't restart.
+  bool setRate(uint32_t adcHz) {
+    if (adcHz < MIN_HZ || adcHz > MAX_HZ || !handle) return false;
+    adc_continuous_stop(handle);
+    adc_continuous_deinit(handle);
+    handle = nullptr;
+    uint32_t old = rate;
+    if (begin(pin_, adcHz)) return true;
+    begin(pin_, old);  // the new rate wouldn't start: put the old one back
+    return false;
+  }
+
+  uint32_t adcHz() const { return rate; }
+  uint32_t outHz() const { return rate / DECIMATION; }
+
   // 2 kHz samples produced so far, i.e. the index the next one will have.
   uint32_t samples() const { return outCount; }
   // Times the driver's pool filled up and data was lost.
@@ -138,6 +161,8 @@ class EmgAdc {
   }
 
   adc_continuous_handle_t handle = nullptr;
+  int pin_ = -1;
+  uint32_t rate = ADC_HZ;
   uint8_t readBuf[FRAME_READINGS * SOC_ADC_DIGI_RESULT_BYTES];
   adc_continuous_data_t parsed[FRAME_READINGS];
   uint16_t mvTable[4096];
