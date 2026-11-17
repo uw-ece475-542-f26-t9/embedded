@@ -90,3 +90,20 @@ def test_emg_features_carry_signal_only_when_the_emg_does(worlds):
         none = evaluate(lambda: FatigueModel(FAST, [], "ridge"), worlds[w], FAST).error_s.mean()
         gain[w] = none - emg
     assert gain["normal"] > 0.3 and gain["normal"] > gain["emg_blind"] + 0.2
+
+
+def test_a_person_fingerprint_feature_is_never_kept():
+    """A feature that only identifies the person (constant within each one) can only help a model that
+    has seen that person. Leave-one-person-out, including in the bootstrap, must give it no credit."""
+    rng = np.random.default_rng(3)
+    groups = np.repeat(np.arange(8), 30)
+    offset = rng.normal(0, 5, 8)
+    X = rng.normal(size=(240, 6))
+    X[:, 0] = np.repeat(rng.normal(size=8), 30)          # fingerprint: one value per person
+    X[:, 1] = rng.normal(size=240)
+    y = 20 + offset[groups] + 3 * X[:, 1] + rng.normal(0, 1, 240)
+    cfg = {**CFG, "search": {**CFG["search"], "subsets": 20, "size": 3, "shuffles": 10, "bootstrap": 20}}
+    r = rank(X, y, groups, [f"f{i}" for i in range(6)], cfg).set_index("feature")
+    assert not r.loc["f0", "kept"] and r.loc["f1", "kept"]
+    # the old bootstrap (a person drawn twice treated as two people) passed it in 60% of resamples
+    assert r.loc["f0", "bootstrap_share"] < 0.3

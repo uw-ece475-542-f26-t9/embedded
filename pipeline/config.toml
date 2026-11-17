@@ -272,3 +272,37 @@ shuffles = 20
 bootstrap = 20
 keep_share = 0.7
 seed = 0
+
+# ---------------------------------------------------------------- step 9: warnings
+[warn]
+max_false_alarm_share = 0.334   # weighted share of sets allowed a false alarm (1 in 3), then fewest misses
+set_weights = [1.0, 1.5, 2.0]   # sets 1, 2, 3: later sets count more, for false alarms and misses alike
+threshold_grid_s = [1.0, 12.0, 0.5]  # thresholds tried when tuning: from, to, step (seconds left)
+persistence = [1, 2]            # lifts in a row below the threshold before a warning fires (tried when tuning)
+default_s = [4.0, 2.0]          # untuned thresholds: the "2 reps" and "1 rep" warnings
+
+# ---------------------------------------------------------------- step 10: lab kit
+[lab]
+data_dir = "recordings"
+baud = 921600                 # team firmware CAPTURE_BAUD (ignored on native USB)
+usb_vids = [0x303A, 0x10C4, 0x1A86, 0x0403]   # ESP32-S3 native USB and the common USB-UART bridges
+rest_record_s = 10
+adc_hz = 8000                 # the firmware's normal ADC rate
+alt_adc_hz = 8400             # aliasing check: rest_alt is recorded at this rate (firmware RATE command)
+alias_tolerance_hz = 1.5      # a peak counts as "stayed" if the other recording has one this close
+pull_s = 3                    # all-out pull length (protocol step 4)
+pull_lead_s = 2               # still time recorded before and after a pull
+pull_after_set_s = 5          # the pull starts this long after a set ends (protocol: within 10 s)
+still_s = 3                   # set start: arm hanging still
+sync_s = 1.5                  # set start: three wrist flicks
+settle_s = 2                  # set start: settle before the first lift
+cadence_s = 2.0               # metronome: lift on one beat, lower on the next (60 beats per minute)
+tail_s = 2                    # keep recording this long after the end is called
+rest_orders = { P01 = [60, 180], P02 = [180, 60], P03 = [180, 60], P04 = [60, 180], P05 = [60, 180], P06 = [180, 60], P07 = [180, 60], P08 = [60, 180] }
+beat_sound = "/System/Library/Sounds/Tink.aiff"   # macOS; lift beat
+off_sound = "/System/Library/Sounds/Pop.aiff"     # lower beat
+
+[sweep]                       # step 10.5: knob settings tried, nested by person (Adi, 2026-11-17: 12 settings)
+"bins.halfwidth_deg" = [15, 20]
+"features.fixed_window" = [256, 384, 512]
+"features.baseline_lifts" = [3, 4]

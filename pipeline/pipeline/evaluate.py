@@ -73,16 +73,21 @@ class SetData:
 
 
 def load_sets(folder: str | Path) -> list[SetData]:
-    folder, sets = Path(folder), []
+    folder, sets, unlabelled = Path(folder), [], []
     for side in sorted(folder.glob("*_set[0-9].json")):
         info = json.loads(side.read_text())
         labels = info.get("labels", {})
+        if labels.get("set_start_s") is None:   # not labelled from video yet (pipeline.labels apply)
+            unlabelled.append(side.stem)
+            continue
         sets.append(SetData(name=side.stem, path=side.with_suffix(".bin"), participant=info["participant"],
                             set_no=int(info["set"]), rest_before_s=info.get("rest_before_s"),
                             set_start_s=float(labels["set_start_s"]), stop_s=labels.get("stop_point_s"),
                             failure_s=labels.get("failure_s"), meta=info))
+    if unlabelled:
+        print(f"skipped {len(unlabelled)} set(s) with no video labels yet: {', '.join(unlabelled)}")
     if not sets:
-        raise FileNotFoundError(f"no sets (NAME_setN.json) in {folder}")
+        raise FileNotFoundError(f"no labelled sets (NAME_setN.json with labels) in {folder}")
     return sets
 
 
@@ -115,7 +120,10 @@ def hold_latest(t: np.ndarray, left: np.ndarray, grid: np.ndarray) -> np.ndarray
     return out
 
 
-def score_set(s: SetData, t: np.ndarray, left: np.ndarray, cfg: dict) -> dict:
+def score_set(s: SetData, t: np.ndarray, left: np.ndarray, cfg: dict,
+              fired: tuple[float | None, float | None] | None = None) -> dict:
+    """fired: the model's own warning times (2-rep, 1-rep), from a step 9 policy. Without it a warning
+    fires when the prediction first reaches warn_s, read on the grid."""
     e = cfg["eval"]
     grid = grid_for(s, cfg)
     pred = hold_latest(t, left, grid)
@@ -127,8 +135,11 @@ def score_set(s: SetData, t: np.ndarray, left: np.ndarray, cfg: dict) -> dict:
         ok = before & ~np.isnan(pred)
         row["error_s"] = float(np.mean(np.abs(pred[ok] - true_left[ok]))) if ok.any() else np.nan
     for level, (warn, false_s) in enumerate(zip(e["warn_s"], e["false_alarm_s"]), start=1):
-        fired = np.nonzero(pred <= warn + 1e-9)[0]
-        when = float(grid[fired[0]]) if len(fired) else None
+        if fired is not None:
+            when = fired[level - 1]
+        else:
+            below = np.nonzero(pred <= warn + 1e-9)[0]
+            when = float(grid[below[0]]) if len(below) else None
         key = f"w{len(e['warn_s']) - level + 1}"  # w2 = the "2 reps" warning, w1 = "1 rep"
         if s.stop_s is None:
             row[f"{key}_false"] = when is not None
@@ -152,7 +163,8 @@ def evaluate(make_model: Callable[[], Model], sets: list[SetData], cfg: dict) ->
         model.fit([s for s in sets if s.participant != person])
         for s in (s for s in sets if s.participant == person):
             t, left = model.predict(s)
-            rows.append(score_set(s, t, left, cfg))
+            fired = model.warnings(s) if hasattr(model, "warnings") else None
+            rows.append(score_set(s, t, left, cfg, fired))
     return pd.DataFrame(rows)
 
 
@@ -168,6 +180,16 @@ def summarize(name: str, df: pd.DataFrame) -> dict:
     out["error s, range over people"] = (f"{per_person.min():.1f}-{per_person.max():.1f}"
                                          if len(per_person) else "-")
     return out
+
+
+def md_table(df: pd.DataFrame, index: bool = False) -> str:
+    """A markdown table, without needing the tabulate package."""
+    if index:
+        df = df.reset_index()
+    cols = [str(c) for c in df.columns]
+    fmt = lambda v: "" if v is None or (isinstance(v, float) and np.isnan(v)) else (f"{v:.2f}" if isinstance(v, float) else str(v))  # noqa: E731
+    rows = ["| " + " | ".join(fmt(v) for v in r) + " |" for r in df.itertuples(index=False)]
+    return "\n".join(["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols), *rows])
 
 
 def report(results: dict[str, pd.DataFrame], title: str) -> str:
