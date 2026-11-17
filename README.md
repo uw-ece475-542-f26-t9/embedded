@@ -16,6 +16,7 @@ Signal processing and ML for the bicep fatigue wearable. The plan and design rul
 | 7 | Kalman filters: level + slope per feature, q and r fitted by maximum likelihood on training people, innovation check | Done |
 | 8 | Models (ridge, small net under the size rule, physics-style comparison) and the nested random-subset search; feature cache. Trained on real data only | Built (code-tested) |
 | 10 (1-3) | Lab kit: protocol recorder with metronome and cues (`python -m pipeline.lab P01`), on-the-spot checks, video label import with sync-flick alignment and rater agreement (`python -m pipeline.labels`) | Built (code-tested; needs the board) |
+| 10.4-10.5 | One-command report (`python -m pipeline.report recordings/`) and nested 12-setting knob sweep (`python -m pipeline.sweep recordings/`); both refuse simulated data unless `--sim` (code check) | Built (code-tested) |
 | 9 | Warnings: threshold + persistence + latch, tuned on out-of-person predictions: weighted false alarms <= 1 in 3 sets (later sets weigh more), then fewest misses | Built (code-tested) |
 
 ## Use
@@ -69,6 +70,8 @@ s.problems(cfg), s.notes()
 | `pipeline/warn.py` | Step 9: `Policy`, `tune`, `Warned` |
 | `pipeline/lab.py` | Step 10: protocol recorder, cues, on-the-spot checks |
 | `pipeline/labels.py` | Step 10: video label sheet, sync-flick alignment, rater agreement |
+| `pipeline/report.py` | Step 10.4: recordings to markdown report |
+| `pipeline/sweep.py` | Step 10.5: nested knob sweep |
 | `pipeline/evaluate.py` | Step 3 harness: `SetData`, `load_sets`, `evaluate`, `report`, `causal_check` |
 | `pipeline/models.py` | Baselines and the oracle |
 | `tests/` | Tests |

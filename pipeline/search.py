@@ -48,6 +48,8 @@ def subset_scores(X: np.ndarray, y: np.ndarray, groups: np.ndarray, subsets: np.
     pen[-1, -1] = 0.0
     err = np.zeros(S)
     folds = np.unique(groups)
+    if len(folds) < 2:   # nobody left to train on: no score
+        return np.full(S, np.nan)
     for g in folds:
         tr, te = groups != g, groups == g
         mu, sd = X[tr].mean(0), X[tr].std(0)
@@ -86,6 +88,9 @@ def rank(X: np.ndarray, y: np.ndarray, groups: np.ndarray, names: list[str], cfg
     c, lam = cfg["search"], cfg["model"]["ridge_lambda"]
     rng = rng or np.random.default_rng(c["seed"])
     F = X.shape[1]
+    if len(np.unique(groups)) < 2:   # can't leave anyone out: nothing can be ranked, nothing kept
+        return pd.DataFrame({"feature": names, "credit": np.nan, "raw_credit": np.nan, "luck95": np.nan,
+                             "bootstrap_share": 0.0, "kept": False})
     subsets = choose_subsets(F, c["size"], c["subsets"], rng)
     adjusted, raw = credits(subsets, subset_scores(X, y, groups, subsets, lam), F)
     luck = np.array([credits(subsets, subset_scores(X, _shuffle_within(y, groups, rng), groups, subsets, lam), F)[0]
@@ -95,10 +100,14 @@ def rank(X: np.ndarray, y: np.ndarray, groups: np.ndarray, names: list[str], cfg
     beats = np.zeros(F)
     for _ in range(c["bootstrap"]):
         pick = rng.choice(people, len(people), replace=True)
+        if len(set(pick)) < 2:   # a resample of one person repeated can't be scored; it counts as a fail
+            continue
         rows = [np.flatnonzero(groups == p) for p in pick]
         Xb = np.vstack([X[r] for r in rows])
         yb = np.concatenate([y[r] for r in rows])
-        gb = np.concatenate([np.full(len(r), i) for i, r in enumerate(rows)])  # a repeated person is two people
+        # A person drawn twice keeps one group label, so both copies are held out together: two labels
+        # would let one copy train the model while its twin is scored (a leak that inflates credit).
+        gb = np.concatenate([groups[r] for r in rows])
         beats += credits(subsets, subset_scores(Xb, yb, gb, subsets, lam), F)[0] > luck95
     share = beats / max(c["bootstrap"], 1)
     out = pd.DataFrame({"feature": names, "credit": adjusted, "raw_credit": raw, "luck95": luck95,

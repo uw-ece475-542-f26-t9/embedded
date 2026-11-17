@@ -298,3 +298,8 @@ tail_s = 2                    # keep recording this long after the end is called
 rest_orders = { P01 = [60, 180], P02 = [180, 60], P03 = [180, 60], P04 = [60, 180], P05 = [60, 180], P06 = [180, 60], P07 = [180, 60], P08 = [60, 180] }
 beat_sound = "/System/Library/Sounds/Tink.aiff"   # macOS; lift beat
 off_sound = "/System/Library/Sounds/Pop.aiff"     # lower beat
+
+[sweep]                       # step 10.5: knob settings tried, nested by person (Adi, 2026-11-17: 12 settings)
+"bins.halfwidth_deg" = [15, 20]
+"features.fixed_window" = [256, 384, 512]
+"features.baseline_lifts" = [3, 4]

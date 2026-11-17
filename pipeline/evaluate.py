@@ -182,6 +182,16 @@ def summarize(name: str, df: pd.DataFrame) -> dict:
     return out
 
 
+def md_table(df: pd.DataFrame, index: bool = False) -> str:
+    """A markdown table, without needing the tabulate package."""
+    if index:
+        df = df.reset_index()
+    cols = [str(c) for c in df.columns]
+    fmt = lambda v: "" if v is None or (isinstance(v, float) and np.isnan(v)) else (f"{v:.2f}" if isinstance(v, float) else str(v))  # noqa: E731
+    rows = ["| " + " | ".join(fmt(v) for v in r) + " |" for r in df.itertuples(index=False)]
+    return "\n".join(["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols), *rows])
+
+
 def report(results: dict[str, pd.DataFrame], title: str) -> str:
     table = pd.DataFrame([summarize(n, df) for n, df in results.items()])
     lines = [f"# {title}", "", "w2 = the 2-rep warning, w1 = the 1-rep warning. Lead is seconds before "
