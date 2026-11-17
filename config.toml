@@ -272,3 +272,11 @@ shuffles = 20
 bootstrap = 20
 keep_share = 0.7
 seed = 0
+
+# ---------------------------------------------------------------- step 9: warnings
+[warn]
+max_false_alarm_share = 0.334   # weighted share of sets allowed a false alarm (1 in 3), then fewest misses
+set_weights = [1.0, 1.5, 2.0]   # sets 1, 2, 3: later sets count more, for false alarms and misses alike
+threshold_grid_s = [1.0, 12.0, 0.5]  # thresholds tried when tuning: from, to, step (seconds left)
+persistence = [1, 2]            # lifts in a row below the threshold before a warning fires (tried when tuning)
+default_s = [4.0, 2.0]          # untuned thresholds: the "2 reps" and "1 rep" warnings

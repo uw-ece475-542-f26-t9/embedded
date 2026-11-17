@@ -115,7 +115,10 @@ def hold_latest(t: np.ndarray, left: np.ndarray, grid: np.ndarray) -> np.ndarray
     return out
 
 
-def score_set(s: SetData, t: np.ndarray, left: np.ndarray, cfg: dict) -> dict:
+def score_set(s: SetData, t: np.ndarray, left: np.ndarray, cfg: dict,
+              fired: tuple[float | None, float | None] | None = None) -> dict:
+    """fired: the model's own warning times (2-rep, 1-rep), from a step 9 policy. Without it a warning
+    fires when the prediction first reaches warn_s, read on the grid."""
     e = cfg["eval"]
     grid = grid_for(s, cfg)
     pred = hold_latest(t, left, grid)
@@ -127,8 +130,11 @@ def score_set(s: SetData, t: np.ndarray, left: np.ndarray, cfg: dict) -> dict:
         ok = before & ~np.isnan(pred)
         row["error_s"] = float(np.mean(np.abs(pred[ok] - true_left[ok]))) if ok.any() else np.nan
     for level, (warn, false_s) in enumerate(zip(e["warn_s"], e["false_alarm_s"]), start=1):
-        fired = np.nonzero(pred <= warn + 1e-9)[0]
-        when = float(grid[fired[0]]) if len(fired) else None
+        if fired is not None:
+            when = fired[level - 1]
+        else:
+            below = np.nonzero(pred <= warn + 1e-9)[0]
+            when = float(grid[below[0]]) if len(below) else None
         key = f"w{len(e['warn_s']) - level + 1}"  # w2 = the "2 reps" warning, w1 = "1 rep"
         if s.stop_s is None:
             row[f"{key}_false"] = when is not None
@@ -152,7 +158,8 @@ def evaluate(make_model: Callable[[], Model], sets: list[SetData], cfg: dict) ->
         model.fit([s for s in sets if s.participant != person])
         for s in (s for s in sets if s.participant == person):
             t, left = model.predict(s)
-            rows.append(score_set(s, t, left, cfg))
+            fired = model.warnings(s) if hasattr(model, "warnings") else None
+            rows.append(score_set(s, t, left, cfg, fired))
     return pd.DataFrame(rows)
 
 
