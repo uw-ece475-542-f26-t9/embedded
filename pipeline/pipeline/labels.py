@@ -36,24 +36,41 @@ from .load import load_session
 COLUMNS = ["recording", "rater", "video_sync_s", "set_start_video_s", "stop_point_video_s", "failure_video_s", "notes"]
 
 
-def find_flicks(rec_path: Path, cfg: dict, min_dps: float = 150.0) -> float | None:
-    """Time (recording clock) of the first of the sync flicks: the first big twist about the forearm."""
+def find_flicks(rec_path: Path, cfg: dict, min_dps: float | None = None, window_s: float = 2.5) -> float | None:
+    """Time (recording clock) of the first sync flick: the start of the first cluster of 3+ sharp
+    rotations (any axis) within window_s, before the first lift. Each flick (out and back) gives two
+    rotation peaks. Any axis, because a real flick is often a wrist flex rather than a pure twist
+    (found on the board 2026-11-19: 240 deg/s of rotation, only 58 deg/s about the forearm).
+    Searched from the "flick" cue (sync_cue marker) on, where nothing else moves, so the threshold can
+    be low: flick_min_dps, or twice the fastest rotation while the arm hung still before the cue if
+    that is higher. With a dumbbell in hand flicks were only 70-130 deg/s (pilot 2026-11-20), so a
+    fixed 90 deg/s missed set 1's."""
+    from scipy.signal import find_peaks
+
+    from .features import find_lifts
+
     s = load_session(rec_path, cfg)
     if not len(s.imu_t):
         return None
     tr = forearm_angle(s, cfg)
-    if tr.forearm_axis is None:
-        return None
-    twist = np.abs(s.gyro @ tr.forearm_axis)
-    big = np.flatnonzero(twist > min_dps)
-    if not len(big):
-        return None
-    # the first cluster of big twist samples; its peak is the flick
-    end = big[0]
-    while end + 1 < len(twist) and twist[end + 1] > min_dps / 2:
-        end += 1
-    k = big[0] + int(np.argmax(twist[big[0]:end + 1]))
-    return float(s.imu_t[k])
+    lifts = find_lifts(tr, s.gyro, cfg)
+    before = lifts[0].t_start if lifts else s.imu_t[-1]
+    spin = np.linalg.norm(s.gyro, axis=1)
+    hz = 1 / np.median(np.diff(s.imu_t)) if len(s.imu_t) > 1 else 50.0
+    cue = dict((label, t) for t, label in s.markers).get("sync_cue")
+    if min_dps is None:
+        min_dps = cfg["lab"]["flick_min_dps"]
+        if cue is not None and (s.imu_t < cue).any():
+            min_dps = max(min_dps, 2 * float(spin[s.imu_t < cue].max()))
+        elif cue is None:
+            min_dps = max(min_dps, 90.0)   # no cue to search from: keep the strict threshold
+    peaks, _ = find_peaks(spin, height=min_dps, distance=max(1, int(0.15 * hz)))
+    after = (cue - 0.3) if cue is not None else -np.inf
+    times = [float(s.imu_t[k]) for k in peaks if after <= s.imu_t[k] < before]
+    for i, t0 in enumerate(times):
+        if sum(t0 <= t <= t0 + window_s for t in times[i:]) >= 3:
+            return t0
+    return None
 
 
 def template(data_dir: Path, raters=("rater1", "rater2")) -> Path:

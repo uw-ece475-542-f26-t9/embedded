@@ -1,11 +1,19 @@
 """Step 10: the lab kit's recorder. Records one protocol step at a time from the team firmware in
 capture mode (CAPTURE_MODE 1), names it the protocol's way, runs the cues, and checks it on the spot.
 
-    python -m pipeline.lab P01 --weight-kg 10          # walks through the whole session in order
+Two scripts (DATA_COLLECTION_PROTOCOL.md §2):
+
+    python -m pipeline.cold P01                        # 1. the 3 cold max pulls, as soon as they arrive
+    python -m pipeline.lab P01 --weight-kg 10          # 2. everything else, in order
     python -m pipeline.lab P01 --only rest             # one step
 
-Steps, in protocol order (DATA_COLLECTION_PROTOCOL.md §2):
-    rest -> rest_alt (aliasing check) -> pull_base1..3 -> set1 -> pull1 -> [rest] -> set2 -> pull2 -> [rest] -> set3 -> pull3 -> pull_recovery
+    cold:  pull_base1..3 (60 s apart)
+    main:  rest -> rest_alt (aliasing check) -> own_warmup (their own; not recorded) -> pull_warm1..3 (60 s
+           apart) -> pace (metronome practice until Enter; not recorded) -> [2 min] -> set1 -> pull1 -> [rest]
+           -> set2 -> pull2 -> [rest] -> set3 -> pull3 -> pull_recovery
+100% = the best of all 6 max pulls (cold and warm).
+Every rest shows a live counter (spoken at 60/30/10/5 s; type skip + Enter to end it). Sets start only on
+'go' + Enter, so a stray Enter can't start one.
 Each recording is <data_dir>/<P01>_<step>.bin (the raw stream, as received) plus .json (who, what,
 cue markers on the recording's clock, empty labels for the video raters).
 
@@ -42,8 +50,11 @@ from .clean import alias_check, rest_check
 from .config import ROOT, load_config
 from .load import load_session
 
-STEPS = ["rest", "rest_alt", "pull_base1", "pull_base2", "pull_base3", "set1", "pull1", "set2", "pull2", "set3", "pull3",
+COLD_STEPS = ["pull_base1", "pull_base2", "pull_base3"]
+MAIN_STEPS = ["rest", "rest_alt", "own_warmup", "pull_warm1", "pull_warm2", "pull_warm3", "pace", "set1", "pull1", "set2", "pull2", "set3", "pull3",
          "pull_recovery"]
+STEPS = COLD_STEPS + MAIN_STEPS
+NO_FILE = {"own_warmup": "pull_warm1", "pace": "set1"}   # steps that record nothing: due until this one is recorded
 
 
 # ------------------------------------------------------------------ outside world
@@ -57,8 +68,13 @@ class Sound:
 
     def beat(self, up: bool) -> None:
         if self.enabled:
-            subprocess.Popen(["afplay", self.c["beat_sound"] if up else self.c["off_sound"]],
+            subprocess.Popen(["afplay", "-v", str(self.c.get("beat_volume", 1.0)),
+                              self.c["beat_sound"] if up else self.c["off_sound"]],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def say_quiet(self, text: str) -> None:
+        if self.enabled:
+            subprocess.Popen(["say", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def say(self, text: str) -> None:
         print(f"  >> {text}")
@@ -85,6 +101,18 @@ class EnterKey:
         while self.presses == seen:
             time.sleep(0.02)
         return self.lines[-1]
+
+
+def probe(port, seconds: float = 1.5) -> tuple[int, bytes]:
+    """Listen briefly: (capture frames heard, a sample of anything else). Text and no frames means the
+    normal firmware is on the board, not the capture build."""
+    reader, other, frames, t0 = FrameReader(), bytearray(), 0, time.monotonic()
+    while time.monotonic() - t0 < seconds:
+        data = port.read(4096)
+        if data:
+            frames += len(reader.feed(data))
+            other += data[:200] if not frames else b""
+    return frames, bytes(other[:200])
 
 
 def open_port(cfg: dict, port: str | None = None):
@@ -115,6 +143,7 @@ class Recording:
     markers: list = field(default_factory=list)   # (s on the recording's clock, label)
     host_start: float = 0.0
     duration_s: float = 0.0
+    interrupted: bool = False   # Ctrl-C during the recording: what came in so far is still saved
 
 
 class Recorder:
@@ -132,10 +161,37 @@ class Recorder:
         base_presses = enter.presses if enter else 0
         rate = float(self.cfg["input"]["emg_hz"])
         out = bytearray()
-        start, host_start = self.clock(), self.wall()
         pending = sorted(cues, key=lambda c: c.at_s)
-        host_marks, presses_seen = [], 0
+        host_marks = []
         self.port.reset_input_buffer() if hasattr(self.port, "reset_input_buffer") else None
+        # Drop whatever piled up while waiting for Enter: it arrives as a burst of full reads. Found on
+        # the board 2026-11-19: 3.5 s of old data at the start of a recording otherwise.
+        t_drain = self.clock()
+        while self.clock() - t_drain < 2.0:
+            if len(self.port.read(4096)) < 4096 and self.clock() - t_drain >= 0.1:
+                break
+        start, host_start = self.clock(), self.wall()
+        interrupted = False
+        try:
+            self._loop(reader, arrivals, enter, base_presses, out, pending, host_marks, start, until, marks)
+        except KeyboardInterrupt:
+            interrupted = True
+            print("\n  Ctrl-C: stopped. Saving what was recorded.")
+        rate = self._rate or rate
+        path.write_bytes(bytes(out))
+        # Host times -> the recording's clock (EMG sample 0 of this file), via the EMG frames' arrivals.
+        rec = Recording(path=path, host_start=host_start, duration_s=self.clock() - start, interrupted=interrupted)
+        if arrivals:
+            first_index = min(f for _, f, _ in arrivals)
+            h = np.array([a for a, _, _ in arrivals])
+            idx = np.array([e for _, _, e in arrivals], float)
+            for t, label in host_marks + [(c, lab) for c, lab in getattr(self, "_cue_marks", [])]:
+                rec.markers.append((round(float(np.interp(t, h, idx) - first_index) / rate, 3), label))
+        self._cue_marks = []
+        return rec
+
+    def _loop(self, reader, arrivals, enter, base_presses, out, pending, host_marks, start, until, marks):
+        self._rate, presses_seen = None, 0
         while True:
             data = self.port.read(4096)
             now = self.clock() - start
@@ -146,7 +202,7 @@ class Recorder:
                         first, n, _ = EMG_HEAD.unpack_from(p)
                         arrivals.append((now, first, first + n))
                     elif ftype == STATUS and len(p) >= STATUS_FMT.size:
-                        rate = float(STATUS_FMT.unpack_from(p)[1]) or rate
+                        self._rate = float(STATUS_FMT.unpack_from(p)[1]) or self._rate
             while pending and pending[0].at_s <= now:
                 pending.pop(0).action()
             presses = (enter.presses - base_presses) if enter else 0
@@ -155,18 +211,7 @@ class Recorder:
                     host_marks.append((now, label))
                 presses_seen = presses
             if until(now, presses):
-                break
-        path.write_bytes(bytes(out))
-        # Host times -> the recording's clock (EMG sample 0 of this file), via the EMG frames' arrivals.
-        rec = Recording(path=path, host_start=host_start, duration_s=self.clock() - start)
-        if arrivals:
-            first_index = min(f for _, f, _ in arrivals)
-            h = np.array([a for a, _, _ in arrivals])
-            idx = np.array([e for _, _, e in arrivals], float)
-            for t, label in host_marks + [(c, lab) for c, lab in getattr(self, "_cue_marks", [])]:
-                rec.markers.append((round(float(np.interp(t, h, idx) - first_index) / rate, 3), label))
-        self._cue_marks = []
-        return rec
+                return
 
     def note(self, label: str, at: float) -> None:
         """A cue that also leaves a marker (e.g. when the sync flicks were asked for)."""
@@ -177,6 +222,8 @@ class Recorder:
 
 
 def kind_of(step: str) -> str:
+    if step in NO_FILE:
+        return step
     return "rest" if step.startswith("rest") else "set" if step.startswith("set") else "pull"
 
 
@@ -190,13 +237,16 @@ class Session:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.weight_kg, self.wait = weight_kg, wait
         self.set_end_host: dict[int, float] = {}
+        self.end_host: dict[str, float] = {}   # host time each step finished (rest counters time from it)
         self.checks: dict[str, dict] = {}
 
     def path(self, step: str) -> Path:
         return self.dir / f"{self.p}_{step}.bin"
 
-    def next_steps(self) -> list[str]:
-        return [s for s in STEPS if not self.path(s).exists()]
+    def next_steps(self, steps: list[str] | None = None) -> list[str]:
+        """Steps not yet recorded. The warm-up and pace practice leave no file: each is due only while
+        the recording after it isn't there."""
+        return [s for s in (steps or MAIN_STEPS) if not self.path(NO_FILE.get(s, s)).exists()]
 
     def rest_before(self, set_no: int) -> int | None:
         order = self.c["rest_orders"].get(self.p)
@@ -220,8 +270,11 @@ class Session:
                         rest_order=self.c["rest_orders"].get(self.p))
         if kind == "pull":
             meta["after_set"] = int(step[4:]) if step[4:].isdigit() else 0
+        if rec.interrupted:
+            meta["interrupted"] = True
         rec.path.with_suffix(".json").write_text(json.dumps(meta, indent=1))
         result = self.check(step)
+        result["interrupted"] = rec.interrupted
         self.checks[step] = result
         return result
 
@@ -266,9 +319,13 @@ class Session:
         ended = {}
 
         def until(t, presses):
+            if n == 3 and presses >= 1 and "stop" not in ended:
+                ended["stop"] = t
+                self.sound.say(f"Stop point marked at {t:.0f} seconds. Keep going to failure, then Enter.")
             if presses >= presses_to_end and "t" not in ended:
                 ended["t"] = t
-                self.sound.say("Stop. Rack the weight." if n < 3 else "Done. Rack the weight.")
+                self.sound.say(f"End marked at {t:.0f} seconds. Rack the weight." if n < 3 else
+                               f"Failure marked at {t:.0f} seconds. Done. Rack the weight.")
             return "t" in ended and t >= ended["t"] + c["tail_s"]
 
         self.sound.say("Spotter: call the stop point. Operator: press Enter when it's called"
@@ -282,6 +339,11 @@ class Session:
         s = load_session(self.path(step), self.cfg)
         problems = s.problems(self.cfg)
         out = {"step": step, "problems": problems, "notes": s.notes(), "summary": s.summary()}
+        if len(s.emg) == 0:
+            out["problems"] = ["no data received from the board: is the capture-mode firmware on it, and is "
+                               "it the right port?"]
+            out["ok"] = False
+            return out
         kind = kind_of(step)
         if kind == "rest":
             rc = rest_check(s, self.cfg)
@@ -301,11 +363,22 @@ class Session:
             from .features import find_lifts
             tr = forearm_angle(s, self.cfg)
             out["lifts_seen"] = len(find_lifts(tr, s.gyro, self.cfg))
+            from .labels import find_flicks
+            out["flicks_s"] = find_flicks(self.path(step), self.cfg)
             if np.isnan(tr.hang_known_s):
                 out["problems"].append("no hanging posture found: was the arm still and hanging at the start?")
         elif kind == "pull":
             from .features import pull_loudness
-            out["pull_rms_mv"] = round(pull_loudness(s, self.cfg), 1)
+            out["pull_rms_mv"] = loud = round(pull_loudness(s, self.cfg), 1)
+            # The floor: the rest recording's noise, or for the cold pulls (recorded before it) the
+            # pull's own relaxed lead-in before "Pull!".
+            from .features import pull_lead_noise
+            floor = rest_check(load_session(self.path("rest"), self.cfg), self.cfg).noise_mv \
+                if self.path("rest").exists() else round(pull_lead_noise(s, self.cfg), 2)
+            if floor and loud < self.c["pull_min_ratio"] * floor:
+                out["problems"].append(f"pull loudness {loud} mV is under {self.c['pull_min_ratio']:g}x the "
+                                       f"resting noise ({floor} mV): the sensor isn't reading the muscle (pads not "
+                                       "making contact yet?). Check with the meter, then redo")
         out["ok"] = not out["problems"]
         return out
 
@@ -321,44 +394,164 @@ class Session:
             print(f"    aliasing check: peaks that stayed {a['stayed_hz']}, peaks that moved {a['moved_hz'] or 'none'}")
         if "lifts_seen" in result:
             print(f"    lifts seen: {result['lifts_seen']}")
+        if "flicks_s" in result:
+            f = result["flicks_s"]
+            print(f"    sync flicks at {f:.1f} s" if f is not None else
+                  "    note: sync flicks not found (flick sharper next set; raters line this one up by the first lift)")
         if "pull_rms_mv" in result:
             print(f"    pull loudness: {result['pull_rms_mv']} mV")
 
-    def countdown_rest(self, set_no: int, sleep=time.sleep) -> None:
-        rest = self.rest_before(set_no)
-        if not rest or set_no - 1 not in self.set_end_host:
-            return
-        left = rest - (time.time() - self.set_end_host[set_no - 1])
-        while left > 0:
-            if int(left) in (60, 30, 10):
-                self.sound.say(f"{int(left)} seconds")
-            sleep(min(1.0, left))
-            left = rest - (time.time() - self.set_end_host[set_no - 1])
+    def rest_due(self, step: str) -> tuple[float, float, str] | None:
+        """(seconds, host time the rest started, what it's for) before a step, or None. Rests count from
+        the end of the step before: 60 s between max pulls, after their own warm-up, 2 min after pace
+        practice, and the participant's rest order between sets."""
+        if step in ("pull_base2", "pull_base3", "pull_warm2", "pull_warm3"):
+            prev, secs, what = step[:-1] + str(int(step[-1]) - 1), self.c["pull_rest_s"], "rest between max pulls"
+        elif step == "pull_warm1":
+            prev, secs, what = "own_warmup", self.c["warmup_to_pull_s"], "rest after the warm-up"
+        elif step == "set1":
+            prev, secs, what = "pace", self.c["pace_rest_s"], "rest before set 1"
+        elif step in ("set2", "set3"):
+            prev, secs, what = f"set{int(step[3]) - 1}", self.rest_before(int(step[3])), f"rest before {step}"
+        else:
+            return None
+        if not secs or prev not in self.end_host:
+            return None
+        return float(secs), self.end_host[prev], what
 
-    def walk(self, only: str | None = None) -> None:
-        steps = [only] if only else self.next_steps()
+    def countdown(self, secs: float, since: float, what: str, sleep=time.sleep, now=time.time) -> None:
+        """A rest counter. It prints a new line only at a few moments (start, 60/30/10 s left, done), never
+        redrawing a line every second: a redraw wipes out whatever is being typed, so 'skip' couldn't be
+        typed (pilot 2026-11-20). Spoken at 60/30/10/5 s. Typing 'skip' + Enter ends it early."""
+        enter = getattr(self.rec, "enter", None)
+        typed = len(enter.lines) if enter else 0
+        spoken, shown = set(), set()
+        left = secs - (now() - since)
+        if left > 0:
+            print(f"  {what}: {self._mmss(left)} (type skip + Enter to start early)", flush=True)
+            shown.add(int(left + 0.999))
+        while True:
+            left = secs - (now() - since)
+            if left <= 0:
+                break
+            if enter and any(x.lower() == "skip" for x in enter.lines[typed:]):
+                print(f"  {what}: skipped with {left:.0f} s left.")
+                return
+            whole = int(left + 0.999)
+            if whole in (60, 30, 10) and whole not in shown:
+                shown.add(whole)
+                print(f"  {what}: {self._mmss(whole)} left", flush=True)
+            if whole in (60, 30, 10, 5) and whole not in spoken:
+                spoken.add(whole)
+                self.sound.say_quiet(f"{whole} seconds")
+            sleep(min(0.25, max(left - (whole - 1), 0.05)))
+        print(f"  {what}: done.")
+        self.sound.say_quiet("Rest over.")
+
+    @staticmethod
+    def _mmss(secs: float) -> str:
+        whole = int(secs + 0.999)
+        return f"{whole // 60}:{whole % 60:02d}"
+
+    def own_warmup(self) -> None:
+        """Their own warm-up, between the cold and the warm pulls. Not recorded and not timed."""
+        self.sound.say("Own warm-up: warm up the right arm the way you normally would.")
+        self.wait("  Press Enter when the warm-up is done. ")
+        self.end_host["own_warmup"] = time.time()
+
+    def pace(self) -> None:
+        """Pace practice before set 1 (not recorded): curls to the same metronome as the sets, only to
+        learn the speed. The beat keeps going until Enter. Asks for the dumbbell weight first if it wasn't
+        given (load selection comes just before this, after the warm pulls)."""
+        while self.weight_kg is None:
+            text = self.wait("  Dumbbell weight for the sets (kg): ").strip().replace(",", ".")
+            try:
+                kg = float(text)
+                if 0 < kg < 100:
+                    self.weight_kg = kg
+                    continue
+            except ValueError:
+                pass
+            print("  (type the dumbbell's weight, e.g. 7.5)")
+        self.sound.say("Pace practice: light curls to the beat. Lift on the high beat, lower on the low one.")
+        stop = threading.Event()
+
+        def beats():
+            k, half = 0, self.c["cadence_s"] / 2
+            while not stop.wait(half if k else 1.5):   # first beat 1.5 s after the cue
+                self.sound.beat(k % 2 == 0)
+                k += 1
+        threading.Thread(target=beats, daemon=True).start()
+        try:
+            self.wait("  Press Enter to stop the metronome (the 2 min rest before set 1 starts then). ")
+        finally:
+            stop.set()
+        self.end_host["pace"] = time.time()
+
+    def ask_force(self, step: str) -> float | None:
+        """The luggage scale's peak for a pull, typed by the operator, saved in the pull's .json as
+        force_kg (kilogram-force; only ratios are used). 'none' if there's no reading."""
+        while True:
+            text = self.wait(f"  Scale peak for {step} (kg, or 'none'): ").strip().lower().replace(",", ".")
+            if text == "none":
+                kg = None
+                break
+            try:
+                kg = float(text)
+            except ValueError:
+                print("  (type the number on the scale, e.g. 18.5, or 'none')")
+                continue
+            if 0 < kg < 200:
+                break
+            print("  (that doesn't look like a scale reading: 0-200 kg)")
+        meta_path = self.path(step).with_suffix(".json")
+        meta = json.loads(meta_path.read_text())
+        meta["force_kg"] = kg
+        meta_path.write_text(json.dumps(meta, indent=1))
+        return kg
+
+    def wait_for_go(self, step: str) -> None:
+        """Sets start only on 'go': a stray Enter (left over from a pull or a rest) must not start one."""
+        while self.wait(f"\n[{self.p}] next: {step}. Type go + Enter to start (Ctrl-C to stop). ").strip().lower() != "go":
+            print("  (not started: type go)")
+
+    def walk(self, only: str | None = None, steps: list[str] | None = None) -> None:
+        steps = [only] if only else self.next_steps(steps)
         for step in steps:
             kind = kind_of(step)
+            due = self.rest_due(step)
+            if due:
+                self.countdown(*due)
+            if kind in NO_FILE:
+                getattr(self, kind)()
+                continue
             if kind == "set":
-                self.countdown_rest(int(step[3:]))
-            if not (kind == "pull" and step[4:].isdigit()):   # the pull after a set starts on its own
+                self.wait_for_go(step)
+            elif not (kind == "pull" and step[4:].isdigit()):   # the pull after a set starts on its own
                 self.wait(f"\n[{self.p}] next: {step}. Press Enter to start (Ctrl-C to stop). ")
             else:
                 self.sound.say("Pull in five seconds.")
                 time.sleep(self.c["pull_after_set_s"])
             result = self.run(step)
             self.report(result)
+            if result["interrupted"]:
+                print(f"  Saved {self.path(step).name} (cut short). Session stopped; run the same command to "
+                      "carry on from the next step, or delete that file to redo it.")
+                return
             while not result["ok"]:
                 if self.wait(f"  {step} has problems. Enter = redo it, or type 'keep' to keep it: ").strip() == "keep":
                     break
                 result = self.run(step)
                 self.report(result)
+            self.end_host[step] = time.time()   # the rest counts from the end of the recording,
+            if kind == "pull":                  # not from when the scale reading was typed
+                self.ask_force(step)
 
 
-def main() -> None:
+def main(steps: list[str] | None = None, what: str = "the session") -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("participant", help="P01..P08")
-    ap.add_argument("--only", choices=STEPS, help="record just this step")
+    ap.add_argument("--only", choices=steps or STEPS, help="record just this step")
     ap.add_argument("--weight-kg", type=float)
     ap.add_argument("--port")
     ap.add_argument("--quiet", action="store_true", help="no sounds")
@@ -367,9 +560,19 @@ def main() -> None:
     cfg = load_config(args.config)
     sound = Sound(cfg, enabled=not args.quiet)
     port = open_port(cfg, args.port)
+    frames, other = probe(port)
+    if not frames:
+        hint = ("it's sending text, so the normal firmware is on it: flash the capture build (CAPTURE_MODE=1)"
+                if other.strip() else "it's sending nothing: check the cable, the port, and that it's powered")
+        sys.exit(f"No capture frames from the board on {port.port}: {hint}.")
     rec = Recorder(port, cfg, sound)
     rec.enter = EnterKey()
-    Session(args.participant, cfg, rec, sound, weight_kg=args.weight_kg, wait=rec.enter.wait).walk(args.only)
+    try:
+        Session(args.participant, cfg, rec, sound, weight_kg=args.weight_kg,
+                wait=rec.enter.wait).walk(args.only, steps or MAIN_STEPS)
+        print(f"\n  {what} done.")
+    except KeyboardInterrupt:   # outside a recording (a prompt or a rest counter): nothing to save
+        print("\n  Stopped. Run the same command to carry on from the next step.")
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ FILTER_OF = {"1": "mdf_ratio", "2": "mnf_ratio", "3": "dimitrov_ratio", "4": "lo
              "8": "loud_ratio", "9": "loud_max", "10": "fatigue_index", "11": "emg_cost", "13a": "mdf_ratio",
              "13b": "loud_ratio", "15": "speed_loss", "16": "duration_ratio", "22": "tremor_ratio", "26": "mdf_session"}
 CORE_V1 = ["1", "8", "13a", "15", "17", "22"]
-CACHE_VERSION = 2  # bump when feature code changes in a way the config doesn't show
+CACHE_VERSION = 4  # bump when feature code changes in a way the config doesn't show
 
 
 # ------------------------------------------------------------------ cached feature rows
@@ -93,6 +93,11 @@ class Table:
     def filtered(self, s: SetData) -> pd.DataFrame:
         rows = filter_rows(cached_rows(s, self.cfg), self.specs)
         rows = rows[~rows.is_baseline].reset_index(drop=True)
+        # Lifts after the operator's "end" press (the recorder's tail: racking the weight) aren't part
+        # of the set. Found on the board 2026-11-19: a lift in the 2 s tail.
+        end = [t for t, label in s.meta.get("markers", []) if label == "end"]
+        if end:
+            rows = rows[rows.t_start <= end[0]].reset_index(drop=True)
         if "cut_s" in s.meta:  # the real-time check: what the board knew by then
             rows = rows[rows.t_known <= s.meta["cut_s"]].reset_index(drop=True)
         return rows

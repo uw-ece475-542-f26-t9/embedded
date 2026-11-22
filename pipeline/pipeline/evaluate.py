@@ -68,8 +68,9 @@ class SetData:
         return d
 
     def pulls(self) -> list[Session]:
-        """This person's baseline max pulls (for loudness as a share of max)."""
-        return [load_session(p) for p in sorted(self.path.parent.glob(f"{self.participant}_pull_base*.bin"))]
+        """This person's max pulls before set 1, cold and warm (for loudness as a share of max)."""
+        from .features import max_pull_paths
+        return [load_session(p) for p in max_pull_paths(self.path.parent, self.participant)]
 
 
 def load_sets(folder: str | Path) -> list[SetData]:

@@ -292,15 +292,22 @@ alt_adc_hz = 8400             # aliasing check: rest_alt is recorded at this rat
 alias_tolerance_hz = 1.5      # a peak counts as "stayed" if the other recording has one this close
 pull_s = 3                    # all-out pull length (protocol step 4)
 pull_lead_s = 2               # still time recorded before and after a pull
+pull_after_stop_s = 1.0       # a pull counts until 1 s after "Stop" (people stop a moment late)
+pull_min_ratio = 3.0          # a pull quieter than this x the rest noise is a dead sensor, not a weak pull: REDO
+flick_min_dps = 40            # sync flicks: rotation peaks at least this fast (and 2x the still period)...
+pull_rest_s = 60               # rest between the baseline max pulls (protocol step 4)
+warmup_to_pull_s = 0          # rest after their own warm-up, before the first warm pull (0: straight in)
+pace_rest_s = 120             # rest after pace practice, before set 1
 pull_after_set_s = 5          # the pull starts this long after a set ends (protocol: within 10 s)
 still_s = 3                   # set start: arm hanging still
 sync_s = 1.5                  # set start: three wrist flicks
 settle_s = 2                  # set start: settle before the first lift
 cadence_s = 2.0               # metronome: lift on one beat, lower on the next (60 beats per minute)
 tail_s = 2                    # keep recording this long after the end is called
-rest_orders = { P01 = [60, 180], P02 = [180, 60], P03 = [180, 60], P04 = [60, 180], P05 = [60, 180], P06 = [180, 60], P07 = [180, 60], P08 = [60, 180] }
-beat_sound = "/System/Library/Sounds/Tink.aiff"   # macOS; lift beat
+rest_orders = { P00 = [60, 180], P01 = [60, 180], P02 = [180, 60], P03 = [180, 60], P04 = [60, 180], P05 = [60, 180], P06 = [180, 60], P07 = [180, 60], P08 = [60, 180] }
+beat_sound = "/System/Library/Sounds/Ping.aiff"   # macOS; lift beat (Tink was too quiet to hear mid-set)
 off_sound = "/System/Library/Sounds/Pop.aiff"     # lower beat
+beat_volume = 4.0             # afplay -v: 1 = normal; raise if the beat is hard to hear in the room
 
 [sweep]                       # step 10.5: knob settings tried, nested by person (Adi, 2026-11-17: 12 settings)
 "bins.halfwidth_deg" = [15, 20]

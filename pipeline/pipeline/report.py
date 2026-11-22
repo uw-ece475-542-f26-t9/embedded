@@ -64,6 +64,37 @@ def health_table(folder: Path, cfg: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def pull_table(folder: Path, cfg: dict) -> pd.DataFrame:
+    """Per person, from the max pulls: 100% (best of the 6 before set 1), the warm-up effect (best warm as
+    % of best cold), and each later pull as % of 100% (the strength drop). Force from the luggage scale
+    (force_kg in each pull's .json, typed in the lab kit) and EMG loudness side by side."""
+    from .features import pull_loudness
+
+    def force(path):
+        side = path.with_suffix(".json")
+        return json.loads(side.read_text()).get("force_kg") if side.exists() else None
+
+    rows = []
+    for cold0 in sorted(folder.glob("*_pull_base1.bin")):
+        p = cold0.stem.rsplit("_pull_base1", 1)[0]
+        vals = {}
+        for x in folder.glob(f"{p}_pull*.bin"):
+            kg = force(x)
+            vals[x.stem[len(p) + 5:].lstrip("_")] = (np.nan if kg is None else float(kg), pull_loudness(load_session(x, cfg), cfg))
+        for k, name in ((0, "force"), (1, "EMG")):
+            best = {g: max([v[k] for s, v in vals.items() if s.startswith(g) and np.isfinite(v[k])], default=np.nan)
+                    for g in ("base", "warm")}
+            top = np.nanmax([best["base"], best["warm"]]) if np.isfinite([best["base"], best["warm"]]).any() else np.nan
+            unit = "kg" if k == 0 else "mV"
+            row = {"person": p, "measure": name, f"100%": f"{top:.1f} {unit}" if np.isfinite(top) else "",
+                   "warm / cold": f"{best['warm'] / best['base']:.0%}" if np.isfinite(best["warm"] / best["base"]) else ""}
+            for step in ("1", "2", "3", "recovery"):
+                v = vals.get(step, (np.nan, np.nan))[k]
+                row[f"pull{'_' if step == 'recovery' else ''}{step}"] = f"{v / top:.0%}" if np.isfinite(v) and np.isfinite(top) else ""
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def label_table(folder: Path, cfg: dict) -> tuple[pd.DataFrame, str]:
     rows, cycle = [], cfg["lab"]["cadence_s"]
     for side in sorted(folder.glob("*_set[0-9].json")):
@@ -116,6 +147,11 @@ def build(folder: Path, cfg: dict, sim: bool = False, fast: bool = False) -> str
     lines += ["## 1. Recordings", f"{len(health)} recordings, {len(bad)} with problems.", ""]
     if len(bad):
         lines += [md_table(bad), ""]
+
+    pulls = pull_table(folder, cfg)
+    if len(pulls):
+        lines += ["### Max pulls: 100% = best of the 6 before set 1; later pulls as % of it (strength drop)",
+                  md_table(pulls), ""]
 
     labels, note = label_table(folder, cfg)
     lines += ["## 2. Labels", f"{int(labels.labelled.sum()) if len(labels) else 0} of {len(labels)} sets labelled. {note}.", ""]

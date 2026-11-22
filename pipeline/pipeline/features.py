@@ -311,10 +311,38 @@ def lift_features(s: Session, cfg: dict, cleaner: SpectrumCleaner | None = None,
     return pd.DataFrame(rows)
 
 
-def pull_loudness(pull: Session, cfg: dict, window_s: float = 1.0) -> float:
-    """Loudness of a max pull: RMS of cleaned EMG over its loudest window_s."""
+def pull_window(pull: Session, cfg: dict) -> tuple[int, int]:
+    """EMG sample range of the pull itself: "Pull!" to "Stop" plus pull_after_stop_s (people stop a
+    moment late). Leftover activity from the set before, or a late start after "Stop", is outside it
+    (pilot 2026-11-20: pull2 scored above the baseline pulls from activity after "Stop"). The whole
+    recording if it has no pull markers."""
+    marks = {label: t for t, label in pull.markers}
+    if "pull_start" not in marks or "pull_end" not in marks:
+        return 0, len(pull.emg)
+    a = int(marks["pull_start"] * pull.emg_hz)
+    b = int((marks["pull_end"] + cfg["lab"]["pull_after_stop_s"]) * pull.emg_hz)
+    return max(a, 0), min(b, len(pull.emg))
+
+
+def max_pull_paths(folder: Path, participant: str) -> list[Path]:
+    """The pulls that set 100%: all 6 before set 1 (3 cold, 3 after their own warm-up)."""
+    return sorted(list(folder.glob(f"{participant}_pull_base*.bin")) + list(folder.glob(f"{participant}_pull_warm*.bin")))
+
+
+def pull_lead_noise(pull: Session, cfg: dict) -> float:
+    """RMS of cleaned EMG in the relaxed lead-in before "Pull!" (skips the first 0.3 s)."""
     cl = clean_emg(pull, cfg)
-    x = np.where(cl.skip, np.nan, cl.emg)
+    marks = {label: t for t, label in pull.markers}
+    end = int(marks.get("pull_start", cfg["lab"]["pull_lead_s"]) * cl.fs)
+    x = np.where(cl.skip, np.nan, cl.emg)[int(0.3 * cl.fs):end]
+    return float(np.sqrt(np.nanmean(x ** 2))) if np.isfinite(x).any() else float("nan")
+
+
+def pull_loudness(pull: Session, cfg: dict, window_s: float = 1.0) -> float:
+    """Loudness of a max pull: RMS of cleaned EMG over its loudest window_s inside the pull window."""
+    cl = clean_emg(pull, cfg)
+    a, b = pull_window(pull, cfg)
+    x = np.where(cl.skip, np.nan, cl.emg)[a:b]
     n = max(1, int(window_s * cl.fs))
     sq = pd.Series(x**2).rolling(n, min_periods=int(0.8 * n)).mean()
     return float(np.sqrt(sq.max())) if sq.notna().any() else float("nan")
@@ -339,7 +367,7 @@ def set_features(path: str | Path, cfg: dict) -> pd.DataFrame:
     if set_name != "set1":
         first = path.with_name(f"{participant}_set1.bin")
         ref = reference(load_session(first, cfg), cfg, cleaner) if first.exists() else None
-    pulls = sorted(path.parent.glob(f"{participant}_pull_base*.bin"))
+    pulls = max_pull_paths(path.parent, participant)
     pull_rms = max((pull_loudness(load_session(p, cfg), cfg) for p in pulls), default=None)
     return lift_features(load_session(path, cfg), cfg, cleaner, ref, pull_rms)
 

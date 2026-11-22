@@ -3,3 +3,4 @@ scipy>=1.13
 pandas>=2.2
 pytest>=8
 pyserial>=3.5
+matplotlib>=3.8   # prelim plots only

@@ -51,9 +51,11 @@ class Session:
 
     @property
     def imu_hz(self) -> float:
+        """Average IMU rate. (Not the median spacing: on the board each IMU reading is stamped with the
+        EMG sample count, which moves in 8 ms chunks, so spacings alternate 16 / 24 ms.)"""
         if len(self.imu_t) < 2:
             return 0.0
-        return float(1 / np.median(np.diff(self.imu_t)))
+        return float((len(self.imu_t) - 1) / (self.imu_t[-1] - self.imu_t[0]))
 
     def problems(self, cfg: dict) -> list[str]:
         """Reasons to reject this session. Empty means usable."""

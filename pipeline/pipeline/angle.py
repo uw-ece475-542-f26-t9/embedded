@@ -98,7 +98,14 @@ def forearm_angle(s: Session, cfg: dict) -> AngleTrack:
         angle[best:] = np.degrees(np.arccos(cosang))
 
     rate = np.zeros(len(t))
-    rate[1:] = np.diff(angle) / np.diff(t)  # backward difference: past samples only
+    dt = np.diff(t)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rate[1:] = np.where(dt > 0, np.diff(angle) / dt, np.nan)  # backward difference: past samples only
+    # The board can stamp two IMU readings with the same EMG count (stamps move in 8 ms steps): keep
+    # the previous speed there instead of dividing by zero.
+    for i in range(1, len(rate)):
+        if np.isnan(rate[i]) and i < len(dt) + 1 and dt[i - 1] <= 0:
+            rate[i] = rate[i - 1]
     rate = np.where(np.isnan(rate), 0.0, rate)
     direction = np.where(rate > c["move_dps"], 1, np.where(rate < -c["move_dps"], -1, 0))
     return AngleTrack(t=t, angle_deg=angle, rate_dps=rate, direction=direction,
