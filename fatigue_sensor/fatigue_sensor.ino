@@ -290,7 +290,11 @@ void onLift(uint32_t stamp, const RepFeatures &f) {
   bool alert = !isnan(lastRir) && lastRir <= ALERT_RIR && !alertedThisSet;
   if (alert) {
     alertedThisSet = true;
+#if !CAPTURE_MODE
+    // Data collection (capture mode) stays silent: a buzz would cue the participant and change when
+    // they stop (the label), and the motor shakes the wrist IMU. The normal build still buzzes.
     startHapticAlert();
+#endif
   }
 
   LOGF("Set rep %u: peak %.0f deg/s, moving %.2f s, rom %.0f deg, emg %.1f mV, mdf %.0f Hz%s\n",
