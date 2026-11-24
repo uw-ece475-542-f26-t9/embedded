@@ -436,3 +436,25 @@ def test_pace_asks_for_the_weight_when_it_wasnt_given(tmp_path):
     ses.sound.beat = lambda up: None
     ses.pace()
     assert ses.weight_kg == 7.5
+
+
+def test_sets_without_flicks_line_up_on_the_first_lift_and_raters_have_own_sheets(sim, tmp_path, monkeypatch):
+    import pipeline.labels as labels
+    for p in sim.glob("P01_set1*"):
+        (tmp_path / p.name).write_bytes(p.read_bytes())
+    truth = json.loads((sim / "P01_set1_truth.json").read_text())
+    monkeypatch.setattr(labels, "find_flicks", lambda *a, **k: None)      # flicks missed (7 of 12 real sets)
+    lift0 = labels.first_lift_s(tmp_path / "P01_set1.bin", CFG)
+    assert lift0 == pytest.approx(truth["set_start_s"], abs=0.2)
+    for rater, err in (("ana", 0.0), ("ben", 0.4)):
+        out = template(tmp_path, (rater,))
+        assert out.name == f"labels_{rater}.csv"
+        sheet = pd.read_csv(out)
+        to_video = lambda t: t - truth["set_start_s"] + 30.0  # noqa: E731
+        sheet.loc[0, ["set_start_video_s", "stop_point_video_s"]] = [to_video(truth["set_start_s"]),
+                                                                    to_video(truth["stop_point_s"]) + err]
+        sheet.to_csv(out, index=False)
+    report = labels.apply(tmp_path, CFG)
+    assert report.iloc[0].sync == "first lift"
+    lab = json.loads((tmp_path / "P01_set1.json").read_text())["labels"]
+    assert lab["stop_point_s"] == pytest.approx(truth["stop_point_s"] + 0.2, abs=0.3)

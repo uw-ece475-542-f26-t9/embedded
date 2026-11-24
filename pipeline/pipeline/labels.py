@@ -16,8 +16,12 @@ metronome cycle apart, within one rep if within 1.5 cycles. Disagreements beyond
 discussion: add a row with rater "agreed". The label written is the "agreed" row if there is one,
 otherwise the mean of two raters within one rep; anything else is left unlabelled and listed.
 
-    python -m pipeline.labels template recordings/          writes recordings/labels.csv to fill in
-    python -m pipeline.labels apply recordings/              checks agreement, writes labels into the .json files
+    python -m pipeline.labels template recordings/ --rater alex   writes recordings/labels_alex.csv to fill in
+    python -m pipeline.labels apply recordings/                   reads every labels*.csv, checks agreement,
+                                                                  writes labels into the .json files
+
+If the flicks weren't found in the IMU (or the rater left video_sync_s blank), the set is lined up by
+its first lift instead: recording time = video time - set_start_video_s + the first lift in the IMU.
 """
 
 from __future__ import annotations
@@ -73,35 +77,62 @@ def find_flicks(rec_path: Path, cfg: dict, min_dps: float | None = None, window_
     return None
 
 
-def template(data_dir: Path, raters=("rater1", "rater2")) -> Path:
+def template(data_dir: Path, raters=("rater1", "rater2"), out: Path | None = None) -> Path:
+    """A sheet to fill in. One rater: write it to labels_<rater>.csv so each rater has their own file
+    and can't see the other's marks (apply reads every labels*.csv)."""
     sets = sorted(p.stem for p in Path(data_dir).glob("*_set[0-9].bin"))
     rows = [{c: "" for c in COLUMNS} | {"recording": r, "rater": who} for r in sets for who in raters]
-    out = Path(data_dir) / "labels.csv"
+    out = out or Path(data_dir) / ("labels.csv" if len(raters) > 1 else f"labels_{raters[0]}.csv")
     pd.DataFrame(rows, columns=COLUMNS).to_csv(out, index=False)
     return out
 
 
-def apply(data_dir: Path, cfg: dict, sheet: Path | None = None) -> pd.DataFrame:
-    """Write agreed labels into each set's .json; return one row per set with the agreement."""
+def first_lift_s(rec_path: Path, cfg: dict) -> float | None:
+    """Start of the first lift in the IMU: the fallback sync when the flicks weren't found
+    (7 of the first 12 sets, 2026-11-20). Good to about 0.1 s."""
+    from .features import find_lifts
+    s = load_session(rec_path, cfg)
+    if not len(s.imu_t):
+        return None
+    lifts = find_lifts(forearm_angle(s, cfg), s.gyro, cfg)
+    return float(lifts[0].t_start) if lifts else None
+
+
+def apply(data_dir: Path, cfg: dict, sheet: Path | list[Path] | None = None) -> pd.DataFrame:
+    """Write agreed labels into each set's .json; return one row per set with the agreement.
+    sheet: one or more filled-in sheets (default: every labels*.csv in data_dir)."""
     data_dir = Path(data_dir)
-    df = pd.read_csv(sheet or data_dir / "labels.csv")
+    sheets = [sheet] if isinstance(sheet, (str, Path)) else sheet or sorted(data_dir.glob("labels*.csv"))
+    df = pd.concat([pd.read_csv(p) for p in sheets], ignore_index=True)
+    df = df.dropna(subset=["set_start_video_s", "stop_point_video_s", "failure_video_s"], how="all")
     cycle = cfg["lab"]["cadence_s"]
     report = []
     for rec, g in df.groupby("recording"):
         bin_path = data_dir / f"{rec}.bin"
         flick = find_flicks(bin_path, cfg)
-        row = {"recording": rec, "flick_s": flick, "status": "", "stop_diff_s": np.nan}
-        if flick is None:
-            row["status"] = "no sync flicks found in the IMU"
+        lift0 = first_lift_s(bin_path, cfg)
+        row = {"recording": rec, "flick_s": flick, "sync": "flicks" if flick is not None else "first lift",
+               "status": "", "stop_diff_s": np.nan}
+        if flick is None and lift0 is None:
+            row["status"] = "no sync flicks and no lifts found in the IMU"
             report.append(row)
             continue
 
         def to_rec(r, col):
+            """Video time -> recording time: by the flicks if found and marked, else by the first lift."""
             v = r[col]
-            return None if pd.isna(v) or pd.isna(r["video_sync_s"]) else float(v) - float(r["video_sync_s"]) + flick
+            if pd.isna(v):
+                return None
+            if flick is not None and not pd.isna(r["video_sync_s"]):
+                return float(v) - float(r["video_sync_s"]) + flick
+            if lift0 is not None and not pd.isna(r["set_start_video_s"]):
+                return float(v) - float(r["set_start_video_s"]) + lift0
+            return None
 
         raters = g[g.rater != "agreed"]
         agreed = g[g.rater == "agreed"]
+        by_flicks = flick is not None and g.video_sync_s.notna().all()
+        row["sync"] = "flicks" if by_flicks else "first lift" if flick is None else "flicks + first lift"
         stops = [to_rec(r, "stop_point_video_s") for _, r in raters.iterrows()]
         stops = [x for x in stops if x is not None]
         if len(stops) >= 2:
@@ -131,7 +162,8 @@ def apply(data_dir: Path, cfg: dict, sheet: Path | None = None) -> pd.DataFrame:
         side = bin_path.with_suffix(".json")
         meta = json.loads(side.read_text())
         meta["labels"] = labels
-        meta["label_check"] = {"flick_s": round(flick, 3), "stop_diff_s": None if np.isnan(row["stop_diff_s"])
+        meta["label_check"] = {"flick_s": None if flick is None else round(flick, 3), "sync": row["sync"],
+                               "stop_diff_s": None if np.isnan(row["stop_diff_s"])
                                else round(float(row["stop_diff_s"]), 3), "status": row["status"]}
         side.write_text(json.dumps(meta, indent=1))
         report.append(row)
@@ -150,14 +182,16 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("action", choices=["template", "apply"])
     ap.add_argument("data_dir")
-    ap.add_argument("--sheet", help="labels CSV (default <data_dir>/labels.csv)")
+    ap.add_argument("--sheet", nargs="+", help="filled-in sheets (default: every labels*.csv in data_dir)")
+    ap.add_argument("--rater", help="template: one sheet for this rater only (labels_<rater>.csv)")
     ap.add_argument("--config")
     args = ap.parse_args()
     cfg = load_config(args.config)
     if args.action == "template":
-        print(f"Fill in: {template(Path(args.data_dir))}")
+        raters = (args.rater,) if args.rater else ("rater1", "rater2")
+        print(f"Fill in: {template(Path(args.data_dir), raters)}")
         return
-    report = apply(Path(args.data_dir), cfg, Path(args.sheet) if args.sheet else None)
+    report = apply(Path(args.data_dir), cfg, [Path(p) for p in args.sheet] if args.sheet else None)
     print(report.to_string(index=False))
     print(agreement(report))
 
